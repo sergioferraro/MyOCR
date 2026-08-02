@@ -139,11 +139,20 @@ def _is_text_page(page: fitz.Page) -> bool:
     return len(raw.strip()) >= MIN_TEXT_CHARS
 
 
+def _make_output_filename(original_filename: str) -> str:
+    """Derive output .md filename from the original input filename."""
+    stem = Path(original_filename).stem
+    # Sanitize: remove any path separators or dangerous chars
+    stem = "".join(c for c in stem if c not in ("/", "\\", ":", "*", "?", '"', "<", ">", "|"))
+    return f"{stem}.md"
+
+
 def process_image(
     file_bytes: bytes,
     model: str,
     url: str,
     job_id: str,
+    filename: str,
 ) -> str:
     """
     OCR a single image. Returns the output .md file path.
@@ -154,7 +163,7 @@ def process_image(
     # Write to temp output dir
     output_dir = BASE_DIR / "outputs"
     output_dir.mkdir(exist_ok=True)
-    output_path = str(output_dir / f"{job_id}_extracted.md")
+    output_path = str(output_dir / _make_output_filename(filename))
     with open(output_path, "w", encoding="utf-8") as fh:
         fh.write(result)
 
@@ -169,6 +178,7 @@ def process_pdf(
     url: str,
     force_vlm: bool,
     job_id: str,
+    filename: str,
 ):
     """
     Process a PDF — hybrid text extraction + VLM for scanned pages.
@@ -219,7 +229,7 @@ def process_pdf(
                 _progress(job_id, i + 1, pages)
 
         full_text = "\n\n".join(all_text)
-        output_path = str(output_dir / f"{job_id}_extracted.md")
+        output_path = str(output_dir / _make_output_filename(filename))
         with open(output_path, "w", encoding="utf-8") as fh:
             fh.write(full_text)
 
@@ -248,6 +258,7 @@ def run_ocr_job(
     url: str,
     dpi: int,
     force_vlm: bool,
+    filename: str,
 ):
     """
     Top-level worker: dispatch to image or PDF handler.
@@ -257,11 +268,11 @@ def run_ocr_job(
 
     try:
         if ext in IMAGE_EXTENSIONS:
-            output = process_image(file_bytes, model, url, job_id)
+            output = process_image(file_bytes, model, url, job_id, filename)
             _set_status(job_id, "done", output)
             _progress(job_id, 1, 1)
         elif ext in PDF_EXTENSIONS:
-            output = process_pdf(file_bytes, dpi, model, url, force_vlm, job_id)
+            output = process_pdf(file_bytes, dpi, model, url, force_vlm, job_id, filename)
         else:
             _set_status(job_id, "error", f"Unsupported file type: {ext}")
     except Exception as exc:
@@ -365,6 +376,7 @@ async def start_ocr(
         url=url,
         dpi=dpi,
         force_vlm=force_vlm,
+        filename=file.filename or "unknown",
     )
 
     return {"job_id": job_id}
