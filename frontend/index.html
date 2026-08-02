@@ -67,13 +67,18 @@
     <!-- File Upload -->
     <section class="panel">
       <h2>📄 File</h2>
+      <div class="file-options">
+        <button id="btnWebcam" class="btn-secondary">
+          📷 Scatta Foto (Webcam)
+        </button>
+      </div>
       <div id="dropZone" class="drop-zone">
         <div class="drop-zone-inner">
           <span class="drop-icon">📁</span>
           <p>Trascina qui il file oppure <button id="btnBrowse" class="btn-text">sfoglia</button></p>
           <p class="hint">PDF, PNG, JPG, JPEG, WebP</p>
         </div>
-        <input type="file" id="fileInput" accept=".pdf,.png,.jpg,.jpeg,.webp" hidden>
+        <input type="file" id="fileInput" accept=".pdf,.png,.jpg,.jpeg,.webp,image/*" hidden>
       </div>
       <div id="fileInfo" class="file-info hidden">
         <span id="fileName"></span>

@@ -16,6 +16,7 @@ const pageRangeInput    = $('#pageRangeInput');
 const dropZone          = $('#dropZone');
 const fileInput         = $('#fileInput');
 const btnBrowse         = $('#btnBrowse');
+const btnWebcam         = $('#btnWebcam');
 const fileInfo          = $('#fileInfo');
 const fileName          = $('#fileName');
 const fileSize          = $('#fileSize');
@@ -166,6 +167,93 @@ dropZone.addEventListener('drop', (e) => {
 fileInput.addEventListener('change', () => {
   if (fileInput.files.length) {
     handleFile(fileInput.files[0]);
+  }
+});
+
+// ── Webcam Capture ───────────────────────────────────────────────
+let webcamStream = null;
+
+btnWebcam.addEventListener('click', async () => {
+  // Check if camera API is available
+  const mediaApiAvailable = navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === 'function';
+  
+  if (!mediaApiAvailable) {
+    alert("Errore: la webcam non è supportata in questo contesto.\n" +
+          "Assicurati che il server sia raggiungibile via HTTPS o localhost (non IP).\n" +
+          "Il browser richiede un contesto sicuro per accedere alla camera.");
+    return;
+  }
+  
+  try {
+    // Stop any existing stream
+    if (webcamStream) {
+      webcamStream.getTracks().forEach(track => track.stop());
+    }
+
+    // Request camera access
+    const stream = await navigator.mediaDevices.getUserMedia({ 
+      video: { facingMode: 'user' }  // 'user' for front camera, 'environment' for back
+    });
+    
+    webcamStream = stream;
+    
+    // Create temporary video element for capture
+    const video = document.createElement('video');
+    video.style.display = 'none';
+    video.srcObject = stream;
+    document.body.appendChild(video);
+    
+    // Wait for video to be ready
+    await new Promise((resolve) => {
+      video.onloadedmetadata = () => {
+        video.play();
+        resolve();
+      };
+    });
+    
+    // Create canvas to capture frame
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    
+    // Convert to blob
+    const blob = await new Promise(resolve => {
+      canvas.toBlob(resolve, 'image/jpeg', 0.95);
+    });
+    
+    // Create file from blob
+    const now = new Date();
+    const filename = `webcam_capture_${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}.jpg`;
+    const capturedFile = new File([blob], filename, { type: 'image/jpeg' });
+    
+    // Clean up
+    document.body.removeChild(video);
+    if (stream) {
+      stream.getTracks().forEach(track => track.stop());
+    }
+    
+    // Handle the captured file
+    handleFile(capturedFile);
+    
+  } catch (err) {
+    console.error('Webcam error:', err);
+    let errorMsg = 'Errore durante l\'accesso alla webcam:\n';
+    
+    if (err.name === 'NotAllowedError') {
+      errorMsg += 'Permesso negato. Assicurati di aver autorizzato l\'uso della camera nel browser.';
+    } else if (err.name === 'NotFoundError') {
+      errorMsg += 'Nessuna webcam rilevata sul dispositivo.';
+    } else if (err.name === 'NotReadableError') {
+      errorMsg += 'Impossibile accedere alla webcam. Potrebbe essere in uso da altri applicativi.';
+    } else if (err.name === 'SecurityError') {
+      errorMsg += 'Errore di sicurezza: la webcam non è accessibile in questo contesto.';
+    } else {
+      errorMsg += err.message || 'Errore sconosciuto';
+    }
+    
+    alert(errorMsg);
   }
 });
 
