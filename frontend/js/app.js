@@ -21,6 +21,14 @@ const fileName          = $('#fileName');
 const fileSize          = $('#fileSize');
 const btnStart          = $('#btnStart');
 
+// Preview panel
+const previewPanel      = $('#previewPanel');
+const previewInfo       = $('#previewInfo');
+const previewContainer  = $('#previewContainer');
+const btnPrevPage       = $('#btnPrevPage');
+const btnNextPage       = $('#btnNextPage');
+const previewPageLabel  = $('#previewPageLabel');
+
 const progressPanel     = $('#progressPanel');
 const progressBarFill   = $('.progress-fill');
 const progressText      = $('#progressText');
@@ -42,6 +50,11 @@ const btnCloseModal     = $('#btnCloseModal');
 let selectedFile = null;
 let currentJobId = null;
 let eventSource  = null;
+
+// Preview state
+let previewThumbnails = [];
+let previewPage = 0;
+let previewTotal = 0;
 
 // ── Page Selection Toggle ────────────────────────────────────────
 document.querySelectorAll('input[name="pageMode"]').forEach((radio) => {
@@ -170,7 +183,69 @@ function handleFile(file) {
   fileSize.textContent = formatBytes(file.size);
   show(fileInfo);
   show(btnStart);
+
+  // Load preview
+  loadPreview(file);
 }
+
+// ── File Preview ─────────────────────────────────────────────
+async function loadPreview(file) {
+  previewThumbnails = [];
+  previewPage = 0;
+  previewTotal = 0;
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  try {
+    const res = await fetch('/api/preview', { method: 'POST', body: formData });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+
+    previewThumbnails = data.thumbnails || [];
+    previewTotal = previewThumbnails.length;
+    previewPage = 0;
+
+    // Update info
+    const typeLabel = data.type === 'pdf' ? `PDF — ${data.pages} pag.` : 'Immagine';
+    previewInfo.textContent = `${file.name} · ${formatBytes(file.size)} · ${typeLabel}`;
+
+    // Show/hide navigation
+    if (previewTotal > 1) {
+      show(btnPrevPage);
+      show(btnNextPage);
+      show(previewPageLabel);
+    } else {
+      hide(btnPrevPage);
+      hide(btnNextPage);
+      hide(previewPageLabel);
+    }
+
+    showPreviewPage();
+    show(previewPanel);
+  } catch (err) {
+    console.error('Preview error:', err);
+    hide(previewPanel);
+  }
+}
+
+function showPreviewPage() {
+  const src = previewThumbnails[previewPage];
+  previewContainer.innerHTML = `<img src="${src}" alt="Page ${previewPage + 1}">`;
+  if (previewTotal > 1) {
+    previewPageLabel.textContent = `${previewPage + 1} / ${previewTotal}`;
+  }
+  btnPrevPage.disabled = previewPage === 0;
+  btnNextPage.disabled = previewPage === previewTotal - 1;
+}
+
+btnPrevPage.addEventListener('click', () => {
+  if (previewPage > 0) { previewPage--; showPreviewPage(); }
+});
+
+btnNextPage.addEventListener('click', () => {
+  if (previewPage < previewTotal - 1) { previewPage++; showPreviewPage(); }
+});
 
 // ── Start OCR ────────────────────────────────────────────────────
 btnStart.addEventListener('click', async () => {
@@ -191,6 +266,7 @@ btnStart.addEventListener('click', async () => {
   btnStart.textContent = '⏳ Elaborazione...';
   clearLogs();
   hide(resultPanel);
+  hide(previewPanel);
   show(progressPanel);
   show(logPanel);
   setProgress(0, 'Invio file...');
@@ -373,6 +449,7 @@ btnNewOcr.addEventListener('click', () => {
   currentJobId = null;
   hide(fileInfo);
   hide(btnStart);
+  hide(previewPanel);
   hide(progressPanel);
   hide(logPanel);
   hide(resultPanel);

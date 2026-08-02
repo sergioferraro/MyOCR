@@ -311,6 +311,50 @@ header h1 {
   color: var(--text-muted);
 }
 
+/* ── File Preview ──────────────────────────────────────── */
+.preview-controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.preview-info {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.preview-nav {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+#previewPageLabel {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.preview-container {
+  background: var(--bg-input);
+  border-radius: 6px;
+  min-height: 100px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  position: relative;
+}
+
+.preview-container img {
+  max-width: 100%;
+  max-height: 500px;
+  object-fit: contain;
+  display: block;
+}
+
 /* ── Progress ──────────────────────────────────────────────────── */
 .progress-bar-container {
   background: var(--bg-input);

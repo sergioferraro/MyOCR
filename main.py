@@ -399,6 +399,64 @@ async def list_models(url: str = DEFAULT_URL):
         raise HTTPException(status_code=502, detail=f"Cannot reach VLM server: {exc}")
 
 
+# ── File Preview ──────────────────────────────────────────────────────────
+
+PREVIEW_DPI = 100  # low-res thumbnails, enough for preview
+MAX_PREVIEW_PAGES = 20  # cap to avoid huge responses
+
+
+@app.post("/api/preview")
+async def preview_file(
+    file: UploadFile = File(...),
+):
+    """
+    Generate a preview of an uploaded file.
+    - Images: returned as a single base64 thumbnail.
+    - PDFs: each page rendered as a base64 thumbnail (up to MAX_PREVIEW_PAGES).
+    """
+    contents = await file.read()
+    ext = os.path.splitext(file.filename or "")[1].lower()
+
+    if ext not in IMAGE_EXTENSIONS and ext not in PDF_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type '{ext}'",
+        )
+
+    if ext in IMAGE_EXTENSIONS:
+        # Return the image itself as base64
+        b64 = base64.b64encode(contents).decode("utf-8")
+        return {
+            "type": "image",
+            "filename": file.filename,
+            "pages": 1,
+            "thumbnails": [f"data:image/png;base64,{b64}"],
+        }
+
+    # PDF — render pages as thumbnails
+    try:
+        doc = fitz.open(stream=contents, filetype="pdf")
+        total = len(doc)
+        count = min(total, MAX_PREVIEW_PAGES)
+        thumbnails: list[str] = []
+
+        for i in range(count):
+            page = doc[i]
+            pix = page.get_pixmap(dpi=PREVIEW_DPI)
+            img_bytes = pix.tobytes("png")
+            b64 = base64.b64encode(img_bytes).decode("utf-8")
+            thumbnails.append(f"data:image/png;base64,{b64}")
+
+        return {
+            "type": "pdf",
+            "filename": file.filename,
+            "pages": total,
+            "thumbnails": thumbnails,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Preview error: {exc}")
+
+
 # ── OCR Job ───────────────────────────────────────────────────────────────
 
 @app.post("/api/ocr")
