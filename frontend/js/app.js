@@ -11,6 +11,7 @@ const modelSelect       = $('#modelSelect');
 const btnRefreshModels  = $('#btnRefreshModels');
 const dpiSelect         = $('#dpiSelect');
 const forceVlmCheckbox  = $('#forceVlm');
+const pageRangeInput    = $('#pageRangeInput');
 
 const dropZone          = $('#dropZone');
 const fileInput         = $('#fileInput');
@@ -41,6 +42,26 @@ const btnCloseModal     = $('#btnCloseModal');
 let selectedFile = null;
 let currentJobId = null;
 let eventSource  = null;
+
+// ── Page Selection Toggle ────────────────────────────────────────
+document.querySelectorAll('input[name="pageMode"]').forEach((radio) => {
+  radio.addEventListener('change', () => {
+    const isCustom = document.querySelector('input[name="pageMode"]:checked').value === 'custom';
+    if (isCustom) {
+      show(pageRangeInput);
+    } else {
+      hide(pageRangeInput);
+    }
+  });
+});
+
+function getPageSpec() {
+  const mode = document.querySelector('input[name="pageMode"]:checked').value;
+  if (mode === 'custom') {
+    return pageRangeInput.value.trim();
+  }
+  return 'all';
+}
 
 // ── Helpers ──────────────────────────────────────────────────────
 function formatBytes(bytes) {
@@ -159,9 +180,11 @@ btnStart.addEventListener('click', async () => {
   const model = modelSelect.value;
   const dpi = parseInt(dpiSelect.value, 10);
   const forceVlm = forceVlmCheckbox.checked;
+  const pageSpec = getPageSpec();
 
   if (!model) { alert('Seleziona un modello.'); return; }
   if (!url)   { alert('Inserisci l\'URL del server.'); return; }
+  if (pageSpec !== 'all' && !pageSpec) { alert('Inserisci le pagine da processare.'); return; }
 
   // Reset UI
   btnStart.disabled = true;
@@ -178,6 +201,7 @@ btnStart.addEventListener('click', async () => {
   formData.append('url', url);
   formData.append('dpi', dpi.toString());
   formData.append('force_vlm', forceVlm ? 'true' : 'false');
+  formData.append('page_spec', pageSpec);
 
   try {
     const res = await fetch('/api/ocr', { method: 'POST', body: formData });

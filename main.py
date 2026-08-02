@@ -39,6 +39,55 @@ DPI_OPTIONS = [100, 150, 200, 300]
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 PDF_EXTENSIONS = {".pdf"}
 
+def parse_page_spec(spec: str, total_pages: int) -> list[int]:
+    """
+    Parse a page specification string into a list of 1-based page numbers.
+
+    Supported formats:
+      "all"           -> every page
+      "1,3,5-8,12"    -> pages 1, 3, 5, 6, 7, 8, 12
+      "5"             -> page 5 only
+      ""              -> all pages (default)
+
+    Returns a sorted, deduplicated list of valid page numbers (1-based).
+    Raises ValueError on invalid input.
+    """
+    if not spec or spec.strip().lower() == "all":
+        return list(range(1, total_pages + 1))
+
+    pages: set[int] = set()
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            tokens = part.split("-", 1)
+            try:
+                start = int(tokens[0])
+                end = int(tokens[1])
+            except ValueError:
+                raise ValueError(f"Invalid page range: '{part}'")
+            if start < 1 or end < 1 or start > end:
+                raise ValueError(f"Invalid page range: '{part}'")
+            pages.update(range(start, end + 1))
+        else:
+            try:
+                p = int(part)
+            except ValueError:
+                raise ValueError(f"Invalid page number: '{part}'")
+            if p < 1:
+                raise ValueError(f"Invalid page number: '{part}'")
+            pages.add(p)
+
+    # Clamp to valid range
+    pages = {p for p in pages if 1 <= p <= total_pages}
+    if not pages:
+        raise ValueError(
+            f"No valid pages in '{spec}' for a document with {total_pages} page(s)"
+        )
+    return sorted(pages)
+
+
 SYSTEM_PROMPT = (
     "Convert this image into Markdown text format. Your task is to perform "
     "high-accuracy Optical Character Recognition (OCR). Preserve the document's "
@@ -179,6 +228,7 @@ def process_pdf(
     force_vlm: bool,
     job_id: str,
     filename: str,
+    page_spec: str,
 ):
     """
     Process a PDF — hybrid text extraction + VLM for scanned pages.
@@ -201,18 +251,32 @@ def process_pdf(
         _progress(job_id, 0, pages)
         _add_log(job_id, f"[Start] Processing PDF ({pages} page(s))...")
 
+        # Resolve page selection
+        selected_pages = parse_page_spec(page_spec, pages)
+        if len(selected_pages) < pages:
+            _add_log(job_id, f"[Info] Selected pages: {selected_pages} (of {pages})")
+        else:
+            _add_log(job_id, f"[Info] Processing all {pages} pages")
+
         all_text: list[str] = []
         vlm_pages = 0
         text_pages = 0
+        processed = 0
 
         for i in range(pages):
+            if (i + 1) not in selected_pages:
+                _add_log(job_id, f"[{i + 1}/{pages}] Page {i + 1}: skipped")
+                processed += 1
+                _progress(job_id, processed, pages)
+                continue
             page = doc[i]
 
             if not force_vlm and _is_text_page(page):
                 text = page.get_text("text").strip()
                 all_text.append(text)
                 text_pages += 1
-                _progress(job_id, i + 1, pages)
+                processed += 1
+                _progress(job_id, processed, pages)
                 _add_log(job_id, f"[{i + 1}/{pages}] Page {i + 1}: text extracted directly")
             else:
                 vlm_pages += 1
@@ -226,7 +290,8 @@ def process_pdf(
                     page_bytes = fh.read()
                 result = _send_page_to_vlm(page_bytes, model, url)
                 all_text.append(result)
-                _progress(job_id, i + 1, pages)
+                processed += 1
+                _progress(job_id, processed, pages)
 
         full_text = "\n\n".join(all_text)
         output_path = str(output_dir / _make_output_filename(filename))
@@ -259,6 +324,7 @@ def run_ocr_job(
     dpi: int,
     force_vlm: bool,
     filename: str,
+    page_spec: str,
 ):
     """
     Top-level worker: dispatch to image or PDF handler.
@@ -272,7 +338,7 @@ def run_ocr_job(
             _set_status(job_id, "done", output)
             _progress(job_id, 1, 1)
         elif ext in PDF_EXTENSIONS:
-            output = process_pdf(file_bytes, dpi, model, url, force_vlm, job_id, filename)
+            output = process_pdf(file_bytes, dpi, model, url, force_vlm, job_id, filename, page_spec)
         else:
             _set_status(job_id, "error", f"Unsupported file type: {ext}")
     except Exception as exc:
@@ -342,6 +408,7 @@ async def start_ocr(
     url: str = Form(DEFAULT_URL),
     dpi: int = Form(150),
     force_vlm: bool = Form(False),
+    page_spec: str = Form("all"),
     background_tasks: BackgroundTasks = BackgroundTasks(),
 ):
     """
@@ -377,6 +444,7 @@ async def start_ocr(
         dpi=dpi,
         force_vlm=force_vlm,
         filename=file.filename or "unknown",
+        page_spec=page_spec,
     )
 
     return {"job_id": job_id}

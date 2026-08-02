@@ -134,6 +134,60 @@ header h1 {
   height: 16px;
 }
 
+/* ── Page Selection ─────────────────────────────────────────────── */
+.page-selection-field {
+  grid-column: 1 / -1;
+}
+
+.page-selection {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.radio-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+.radio-label input[type="radio"] {
+  accent-color: var(--accent);
+  width: 16px;
+  height: 16px;
+}
+
+#pageRangeInput {
+  flex: 1;
+  min-width: 180px;
+  padding: 8px 12px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+#pageRangeInput:focus {
+  border-color: var(--accent);
+}
+
+#pageRangeInput::placeholder {
+  color: var(--text-muted);
+}
+
+.page-hint {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  margin-top: 4px;
+}
+
 /* ── Buttons ───────────────────────────────────────────────────── */
 .btn-primary {
   width: 100%;

@@ -46,6 +46,21 @@
             <span>Force VLM (tutte le pagine al VLM)</span>
           </label>
         </div>
+        <div class="field page-selection-field">
+          <label>Pagine da processare</label>
+          <div class="page-selection">
+            <label class="radio-label">
+              <input type="radio" name="pageMode" value="all" checked>
+              <span>Tutte</span>
+            </label>
+            <label class="radio-label">
+              <input type="radio" name="pageMode" value="custom">
+              <span>Intervallo</span>
+            </label>
+            <input type="text" id="pageRangeInput" placeholder="es. 1-5,8,12-15" class="hidden">
+          </div>
+          <p class="page-hint">Usa virgole per pagine singole e trattini per intervalli</p>
+        </div>
       </div>
     </section>
 
