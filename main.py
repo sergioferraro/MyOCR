@@ -9,6 +9,7 @@ Run:  uvicorn main:app --reload
 
 import os
 import sys
+import json
 import base64
 import uuid
 import asyncio
@@ -20,8 +21,8 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Request
-from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Request
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI
@@ -102,6 +103,9 @@ def _set_status(job_id: str, status: str, message: str = ""):
             jobs[job_id].status = status
             if message:
                 jobs[job_id].message = message
+                # If status is "done" and message is a valid file path, store it as output_path
+                if status == "done" and os.path.isfile(message):
+                    jobs[job_id].output_path = message
 
 
 # ---------------------------------------------------------------------------
@@ -323,10 +327,10 @@ async def list_models(url: str = DEFAULT_URL):
 @app.post("/api/ocr")
 async def start_ocr(
     file: UploadFile = File(...),
-    model: str = "",
-    url: str = DEFAULT_URL,
-    dpi: int = 150,
-    force_vlm: bool = False,
+    model: str = Form(""),
+    url: str = Form(DEFAULT_URL),
+    dpi: int = Form(150),
+    force_vlm: bool = Form(False),
     background_tasks: BackgroundTasks = BackgroundTasks(),
 ):
     """
@@ -390,12 +394,12 @@ async def event_stream(job_id: str):
         with jobs_lock:
             job = jobs.get(job_id)
         if not job:
-            yield f"data: { {'type': 'error', 'message': 'Job not found'} }\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Job not found'})}\n\n"
             break
         if job.status in end_statuses:
-            yield f"data: { job.to_dict() }\n\n"
+            yield f"data: {json.dumps(job.to_dict())}\n\n"
             break
-        yield f"data: { job.to_dict() }\n\n"
+        yield f"data: {json.dumps(job.to_dict())}\n\n"
         await asyncio.sleep(0.5)
 
 
@@ -420,12 +424,15 @@ async def download_result(job_id: str):
     with jobs_lock:
         job = jobs.get(job_id)
     if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found. The server may have restarted.")
+    if job.status in ("pending", "processing"):
+        raise HTTPException(status_code=409, detail=f"Job '{job_id}' is still {job.status}. Please wait.")
+    if job.status == "error":
+        raise HTTPException(status_code=422, detail=f"Job failed: {job.message}")
     if not job.output_path or not os.path.isfile(job.output_path):
-        raise HTTPException(status_code=404, detail="No output file available")
+        raise HTTPException(status_code=404, detail="No output file available. The file may have been cleaned up.")
 
     filename = os.path.basename(job.output_path)
-    from fastapi.responses import FileResponse
     return FileResponse(
         path=job.output_path,
         filename=filename,

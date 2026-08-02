@@ -64,6 +64,7 @@ function addLog(text, cls = '') {
 
 function clearLogs() {
   logBox.innerHTML = '';
+  window._ocrLogsShown = 0;
 }
 
 function setProgress(pct, text) {
@@ -212,29 +213,20 @@ function connectSSE(jobId) {
         : 0;
       setProgress(pct, `${data.processed_pages}/${data.total_pages} pagine elaborate`);
 
-      // Append new log lines
+      // Append new log lines (track how many we've already shown)
       const newLogs = data.logs || [];
-      const lastShown = logBox.children.length;
-      // We just re-show all logs to stay in sync
-      if (logBox.children.length === 0) {
-        newLogs.forEach((msg) => {
-          let cls = '';
-          if (msg.includes('[Error]')) cls = 'error';
-          else if (msg.includes('[Success]')) cls = 'success';
-          else if (msg.includes('[Info]')) cls = 'info';
-          addLog(msg, cls);
-        });
-      } else {
-        // Only add the newest line
-        const lastMsg = newLogs[newLogs.length - 1];
-        if (lastMsg) {
-          let cls = '';
-          if (lastMsg.includes('[Error]')) cls = 'error';
-          else if (lastMsg.includes('[Success]')) cls = 'success';
-          else if (lastMsg.includes('[Info]')) cls = 'info';
-          addLog(lastMsg, cls);
-        }
+      if (typeof window._ocrLogsShown === 'undefined') {
+        window._ocrLogsShown = 0;
       }
+      const startIdx = window._ocrLogsShown;
+      for (let i = startIdx; i < newLogs.length; i++) {
+        let cls = '';
+        if (newLogs[i].includes('[Error]')) cls = 'error';
+        else if (newLogs[i].includes('[Success]')) cls = 'success';
+        else if (newLogs[i].includes('[Info]')) cls = 'info';
+        addLog(newLogs[i], cls);
+      }
+      window._ocrLogsShown = newLogs.length;
 
       // Check final status
       if (data.status === 'done') {
@@ -308,9 +300,28 @@ function onJobError(data) {
 }
 
 // ── Download Result ──────────────────────────────────────────────
-btnDownload.addEventListener('click', () => {
+btnDownload.addEventListener('click', async () => {
   if (!currentJobId) return;
-  window.open(`/api/download/${currentJobId}`, '_blank');
+
+  try {
+    const res = await fetch(`/api/download/${currentJobId}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+      alert(`Download fallito: ${err.detail || 'Errore sconosciuto'}`);
+      return;
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${currentJobId}_extracted.md`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    alert(`Errore download: ${err.message}`);
+  }
 });
 
 // ── Markdown Preview ─────────────────────────────────────────────
