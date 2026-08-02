@@ -5,3 +5,5 @@ __pycache__/
 outputs/
 *.md_extracted
 *.extracted.md
+.venv/
+
