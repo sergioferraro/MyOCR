@@ -6,4 +6,9 @@ outputs/
 *.md_extracted
 *.extracted.md
 .venv/
+# Generated OCR output
+*_extracted.md
+# Local PDFs / docs
+*.pdf
+IOS_PORTING_ANALYSIS.md
 
