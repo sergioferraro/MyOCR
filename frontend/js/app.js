@@ -85,16 +85,21 @@ let webcamCapturedPages = [];
 let webcamSessionId = '';
 
 // ── Page Selection Toggle ────────────────────────────────────────
+function syncPageRangeInput() {
+  const isCustom = document.querySelector('input[name="pageMode"]:checked').value === 'custom';
+  if (isCustom) {
+    show(pageRangeInput);
+  } else {
+    hide(pageRangeInput);
+  }
+}
+
 document.querySelectorAll('input[name="pageMode"]').forEach((radio) => {
-  radio.addEventListener('change', () => {
-    const isCustom = document.querySelector('input[name="pageMode"]:checked').value === 'custom';
-    if (isCustom) {
-      show(pageRangeInput);
-    } else {
-      hide(pageRangeInput);
-    }
-  });
+  radio.addEventListener('change', syncPageRangeInput);
 });
+
+// Sync initial state on page load
+syncPageRangeInput();
 
 function getPageSpec() {
   const mode = document.querySelector('input[name="pageMode"]:checked').value;
