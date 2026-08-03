@@ -103,6 +103,12 @@
         <div id="logBox" class="log-box"></div>
       </section>
 
+      <!-- Per-Page Results -->
+      <section class="panel hidden" id="pageResultsPanel">
+        <h2>📑 Pagine Processate</h2>
+        <div id="pageResultsList" class="page-results-list"></div>
+      </section>
+
       <!-- Action buttons -->
       <div class="sidebar-actions hidden" id="sidebarActions">
         <button id="btnDownload" class="btn-secondary btn-full">⬇ Scarica Markdown</button>
@@ -236,6 +242,28 @@
         </div>
         <div class="dialog-actions">
           <button id="btnConfirmRename" class="btn-primary">🚀 Avvia OCR</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Reprocess Page Modal ─────────────────────────────────── -->
+  <div id="reprocessModal" class="modal hidden">
+    <div class="modal-overlay"></div>
+    <div class="modal-content dialog-modal-content">
+      <div class="modal-header">
+        <h3>🔄 Riprocessa Pagina <span id="reprocessPageNum"></span></h3>
+        <button id="btnCloseReprocess" class="btn-close">&times;</button>
+      </div>
+      <div class="dialog-body">
+        <p>Seleziona un modello VLM per riprocessare questa pagina:</p>
+        <div class="reprocess-field">
+          <select id="reprocessModelSelect">
+            <option value="">— Seleziona modello —</option>
+          </select>
+        </div>
+        <div class="dialog-actions">
+          <button id="btnConfirmReprocess" class="btn-primary">🔄 Riprocessa</button>
         </div>
       </div>
     </div>

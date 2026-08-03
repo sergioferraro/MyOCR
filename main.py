@@ -4,6 +4,10 @@ Local OCR Server — FastAPI Backend
 Web server that exposes OCR capabilities via REST API + SSE streaming.
 Serves the web frontend statically.
 
+Per-page processing: each PDF page is tracked individually so that
+single pages can be reprocessed with a different VLM model.  The final
+markdown is assembled on-the-fly at export time.
+
 Run:  uvicorn main:app --reload
 """
 
@@ -39,6 +43,18 @@ DPI_OPTIONS = [100, 150, 200, 300]
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 PDF_EXTENSIONS = {".pdf"}
 
+SYSTEM_PROMPT = (
+    "Convert this image into Markdown text format. Your task is to perform "
+    "high-accuracy Optical Character Recognition (OCR). Preserve the document's "
+    "structure as accurately as possible: headers, lists, and tables. Do not add "
+    "any greetings, explanations, or introductory/concluding remarks. Output only "
+    "the raw recognized text."
+)
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
 def parse_page_spec(spec: str, total_pages: int) -> list[int]:
     """
     Parse a page specification string into a list of 1-based page numbers.
@@ -48,9 +64,6 @@ def parse_page_spec(spec: str, total_pages: int) -> list[int]:
       "1,3,5-8,12"    -> pages 1, 3, 5, 6, 7, 8, 12
       "5"             -> page 5 only
       ""              -> all pages (default)
-
-    Returns a sorted, deduplicated list of valid page numbers (1-based).
-    Raises ValueError on invalid input.
     """
     if not spec or spec.strip().lower() == "all":
         return list(range(1, total_pages + 1))
@@ -63,8 +76,7 @@ def parse_page_spec(spec: str, total_pages: int) -> list[int]:
         if "-" in part:
             tokens = part.split("-", 1)
             try:
-                start = int(tokens[0])
-                end = int(tokens[1])
+                start, end = int(tokens[0]), int(tokens[1])
             except ValueError:
                 raise ValueError(f"Invalid page range: '{part}'")
             if start < 1 or end < 1 or start > end:
@@ -79,7 +91,6 @@ def parse_page_spec(spec: str, total_pages: int) -> list[int]:
                 raise ValueError(f"Invalid page number: '{part}'")
             pages.add(p)
 
-    # Clamp to valid range
     pages = {p for p in pages if 1 <= p <= total_pages}
     if not pages:
         raise ValueError(
@@ -88,13 +99,37 @@ def parse_page_spec(spec: str, total_pages: int) -> list[int]:
     return sorted(pages)
 
 
-SYSTEM_PROMPT = (
-    "Convert this image into Markdown text format. Your task is to perform "
-    "high-accuracy Optical Character Recognition (OCR). Preserve the document's "
-    "structure as accurately as possible: headers, lists, and tables. Do not add "
-    "any greetings, explanations, or introductory/concluding remarks. Output only "
-    "the raw recognized text."
-)
+def _make_output_filename(original_filename: str) -> str:
+    """Derive output .md filename from the original input filename."""
+    stem = Path(original_filename).stem
+    stem = "".join(c for c in stem if c not in ("/", "\\", ":", "*", "?", '"', "<", ">", "|"))
+    return f"{stem}.md"
+
+
+# ---------------------------------------------------------------------------
+# Per-Page Result Tracking
+# ---------------------------------------------------------------------------
+
+@dataclass
+class PageResult:
+    """Stores the OCR result for a single page."""
+    page_num: int               # 1-based page number
+    markdown: str = ""          # extracted markdown text
+    model: str = ""             # model used for this page
+    method: str = ""            # "text_extract" | "vlm" | ""
+    status: str = "pending"     # pending | processing | done | error
+    error_msg: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "page_num": self.page_num,
+            "markdown": self.markdown,
+            "model": self.model,
+            "method": self.method,
+            "status": self.status,
+            "error_msg": self.error_msg,
+        }
+
 
 # ---------------------------------------------------------------------------
 # Job State Management
@@ -112,6 +147,10 @@ class JobState:
     logs: list[str] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
 
+    # Per-page processing
+    file_bytes: bytes = b""       # stored PDF bytes for reprocessing
+    page_results: dict[int, PageResult] = field(default_factory=dict)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "job_id": self.job_id,
@@ -123,6 +162,9 @@ class JobState:
             "output_path": self.output_path,
             "logs": self.logs,
             "created_at": self.created_at,
+            "page_results": {
+                str(k): v.to_dict() for k, v in self.page_results.items()
+            },
         }
 
 
@@ -132,14 +174,12 @@ jobs_lock = threading.Lock()
 
 
 def _add_log(job_id: str, msg: str):
-    """Append a log line to a job."""
     with jobs_lock:
         if job_id in jobs:
             jobs[job_id].logs.append(msg)
 
 
 def _progress(job_id: str, processed: int, total: int):
-    """Update progress counters."""
     with jobs_lock:
         if job_id in jobs:
             jobs[job_id].processed_pages = processed
@@ -152,13 +192,30 @@ def _set_status(job_id: str, status: str, message: str = ""):
             jobs[job_id].status = status
             if message:
                 jobs[job_id].message = message
-                # If status is "done" and message is a valid file path, store it as output_path
                 if status == "done" and os.path.isfile(message):
                     jobs[job_id].output_path = message
 
 
+def _ensure_page_result(job_id: str, page_num: int):
+    """Ensure a PageResult exists for the given page."""
+    with jobs_lock:
+        if job_id in jobs:
+            if page_num not in jobs[job_id].page_results:
+                jobs[job_id].page_results[page_num] = PageResult(page_num=page_num)
+
+
+def _update_page_result(job_id: str, page_num: int, **kwargs):
+    """Update fields on an existing PageResult."""
+    with jobs_lock:
+        if job_id in jobs and page_num in jobs[job_id].page_results:
+            pr = jobs[job_id].page_results[page_num]
+            for k, v in kwargs.items():
+                if hasattr(pr, k):
+                    setattr(pr, k, v)
+
+
 # ---------------------------------------------------------------------------
-# OCR Core (moved from Tkinter workers)
+# OCR Core
 # ---------------------------------------------------------------------------
 
 def _get_client(url: str) -> OpenAI:
@@ -188,13 +245,94 @@ def _is_text_page(page: fitz.Page) -> bool:
     return len(raw.strip()) >= MIN_TEXT_CHARS
 
 
-def _make_output_filename(original_filename: str) -> str:
-    """Derive output .md filename from the original input filename."""
-    stem = Path(original_filename).stem
-    # Sanitize: remove any path separators or dangerous chars
-    stem = "".join(c for c in stem if c not in ("/", "\\", ":", "*", "?", '"', "<", ">", "|"))
-    return f"{stem}.md"
+def _process_single_page(
+    doc: fitz.Document,
+    page_idx: int,
+    dpi: int,
+    model: str,
+    url: str,
+    force_vlm: bool,
+    job_id: str,
+) -> None:
+    """
+    Process a single PDF page and store the result in page_results.
+    page_idx is 0-based.
+    """
+    page_num = page_idx + 1
+    _ensure_page_result(job_id, page_num)
+    _update_page_result(job_id, page_num, status="processing")
 
+    page = doc[page_idx]
+
+    try:
+        if not force_vlm and _is_text_page(page):
+            text = page.get_text("text").strip()
+            _update_page_result(
+                job_id, page_num,
+                markdown=text, model="(text-extract)",
+                method="text_extract", status="done",
+            )
+            _add_log(job_id, f"[{page_num}/{doc.page_count}] Page {page_num}: text extracted directly")
+        else:
+            _add_log(job_id, f"[{page_num}/{doc.page_count}] Converting page {page_num} to image...")
+            pix = page.get_pixmap(dpi=dpi)
+            page_bytes = pix.tobytes("png")
+
+            _add_log(job_id, f"[{page_num}/{doc.page_count}] Sending page {page_num} to VLM ({model})...")
+            result = _send_page_to_vlm(page_bytes, model, url)
+            _update_page_result(
+                job_id, page_num,
+                markdown=result, model=model,
+                method="vlm", status="done",
+            )
+    except Exception as exc:
+        _update_page_result(job_id, page_num, status="error", error_msg=str(exc))
+        _add_log(job_id, f"[Error] Page {page_num}: {exc}")
+
+
+def _merge_page_results(job_id: str) -> str:
+    """
+    Merge all page results (in page order) into a single markdown string.
+    Returns the merged text.
+    """
+    with jobs_lock:
+        job = jobs.get(job_id)
+    if not job:
+        return ""
+
+    parts: list[str] = []
+    for pn in sorted(job.page_results.keys()):
+        pr = job.page_results[pn]
+        if pr.markdown:
+            parts.append(pr.markdown)
+        elif pr.status == "error":
+            parts.append(f"\n\n<!-- Page {pn}: error — {pr.error_msg} -->\n\n")
+        else:
+            parts.append(f"\n\n<!-- Page {pn}: not processed -->\n\n")
+    return "\n\n".join(parts)
+
+
+def _write_merged_output(job_id: str) -> str:
+    """Merge page results and write to outputs/ directory. Returns file path."""
+    merged = _merge_page_results(job_id)
+    output_dir = BASE_DIR / "outputs"
+    output_dir.mkdir(exist_ok=True)
+
+    with jobs_lock:
+        job = jobs.get(job_id)
+    if not job:
+        return ""
+
+    out_filename = _make_output_filename(job.filename)
+    output_path = str(output_dir / out_filename)
+    with open(output_path, "w", encoding="utf-8") as fh:
+        fh.write(merged)
+    return output_path
+
+
+# ---------------------------------------------------------------------------
+# Job Workers
+# ---------------------------------------------------------------------------
 
 def process_image(
     file_bytes: bytes,
@@ -203,19 +341,25 @@ def process_image(
     job_id: str,
     filename: str,
 ) -> str:
-    """
-    OCR a single image. Returns the output .md file path.
-    """
+    """OCR a single image file."""
     _add_log(job_id, "[Start] Processing image...")
-    result = _send_page_to_vlm(file_bytes, model, url)
+    _ensure_page_result(job_id, 1)
+    _update_page_result(job_id, 1, status="processing")
 
-    # Write to temp output dir
-    output_dir = BASE_DIR / "outputs"
-    output_dir.mkdir(exist_ok=True)
-    output_path = str(output_dir / _make_output_filename(filename))
-    with open(output_path, "w", encoding="utf-8") as fh:
-        fh.write(result)
+    try:
+        result = _send_page_to_vlm(file_bytes, model, url)
+        _update_page_result(
+            job_id, 1,
+            markdown=result, model=model,
+            method="vlm", status="done",
+        )
+        _add_log(job_id, "[Success] Image processed")
+    except Exception as exc:
+        _update_page_result(job_id, 1, status="error", error_msg=str(exc))
+        _add_log(job_id, f"[Error] Image processing failed: {exc}")
 
+    # Write merged output (just 1 page)
+    output_path = _write_merged_output(job_id)
     _add_log(job_id, f"[Success] File saved to {output_path}")
     return output_path
 
@@ -232,12 +376,9 @@ def process_pdf(
 ):
     """
     Process a PDF — hybrid text extraction + VLM for scanned pages.
-    Returns the output .md file path.
+    Each page result is stored individually in page_results.
     """
     tmpdir = None
-    output_dir = BASE_DIR / "outputs"
-    output_dir.mkdir(exist_ok=True)
-
     try:
         tmpdir = tempfile.mkdtemp(prefix="myocr_")
         doc = fitz.open(stream=file_bytes, filetype="pdf")
@@ -248,55 +389,53 @@ def process_pdf(
             _set_status(job_id, "error", "PDF has 0 pages")
             return ""
 
+        # Store file bytes for potential reprocessing
+        with jobs_lock:
+            if job_id in jobs:
+                jobs[job_id].file_bytes = file_bytes
+
         _progress(job_id, 0, pages)
         _add_log(job_id, f"[Start] Processing PDF ({pages} page(s))...")
 
-        # Resolve page selection
         selected_pages = parse_page_spec(page_spec, pages)
         if len(selected_pages) < pages:
             _add_log(job_id, f"[Info] Selected pages: {selected_pages} (of {pages})")
         else:
             _add_log(job_id, f"[Info] Processing all {pages} pages")
 
-        all_text: list[str] = []
+        # Initialize all pages as pending
+        for i in range(pages):
+            pn = i + 1
+            _ensure_page_result(job_id, pn)
+            if pn not in selected_pages:
+                _update_page_result(job_id, pn, status="done", markdown="", method="skipped")
+                _add_log(job_id, f"[{pn}/{pages}] Page {pn}: skipped")
+
         vlm_pages = 0
         text_pages = 0
         processed = 0
 
         for i in range(pages):
-            if (i + 1) not in selected_pages:
-                _add_log(job_id, f"[{i + 1}/{pages}] Page {i + 1}: skipped")
+            pn = i + 1
+            if pn not in selected_pages:
                 processed += 1
                 _progress(job_id, processed, pages)
                 continue
-            page = doc[i]
 
-            if not force_vlm and _is_text_page(page):
-                text = page.get_text("text").strip()
-                all_text.append(text)
-                text_pages += 1
-                processed += 1
-                _progress(job_id, processed, pages)
-                _add_log(job_id, f"[{i + 1}/{pages}] Page {i + 1}: text extracted directly")
-            else:
+            _process_single_page(doc, i, dpi, model, url, force_vlm, job_id)
+
+            with jobs_lock:
+                pr = jobs[job_id].page_results.get(pn)
+            if pr and pr.method == "vlm":
                 vlm_pages += 1
-                _add_log(job_id, f"[{i + 1}/{pages}] Converting page {i + 1} to image...")
-                pix = page.get_pixmap(dpi=dpi)
-                page_path = os.path.join(tmpdir, f"page_{i + 1}.png")
-                pix.save(page_path)
+            elif pr and pr.method == "text_extract":
+                text_pages += 1
 
-                _add_log(job_id, f"[{i + 1}/{pages}] Sending page {i + 1} to VLM...")
-                with open(page_path, "rb") as fh:
-                    page_bytes = fh.read()
-                result = _send_page_to_vlm(page_bytes, model, url)
-                all_text.append(result)
-                processed += 1
-                _progress(job_id, processed, pages)
+            processed += 1
+            _progress(job_id, processed, pages)
 
-        full_text = "\n\n".join(all_text)
-        output_path = str(output_dir / _make_output_filename(filename))
-        with open(output_path, "w", encoding="utf-8") as fh:
-            fh.write(full_text)
+        # Merge and write output
+        output_path = _write_merged_output(job_id)
 
         _add_log(job_id, (
             f"[Info] Done — {text_pages} page(s) via text extraction, "
@@ -326,10 +465,7 @@ def run_ocr_job(
     filename: str,
     page_spec: str,
 ):
-    """
-    Top-level worker: dispatch to image or PDF handler.
-    Called from a BackgroundTasks (asyncio threadpool).
-    """
+    """Top-level worker: dispatch to image or PDF handler."""
     _set_status(job_id, "processing")
 
     try:
@@ -353,7 +489,7 @@ def run_ocr_job(
 app = FastAPI(
     title="Local OCR Server",
     description="OCR via local Vision Language Model (LM Studio)",
-    version="2.0.0",
+    version="2.1.0",
 )
 
 app.add_middleware(
@@ -363,7 +499,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Serve frontend static files
 if (FRONTEND_DIR / "index.html").exists():
     app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
 
@@ -372,7 +507,6 @@ if (FRONTEND_DIR / "index.html").exists():
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_frontend():
-    """Serve the web frontend."""
     index_path = FRONTEND_DIR / "index.html"
     if index_path.exists():
         return index_path.read_text(encoding="utf-8")
@@ -383,14 +517,13 @@ async def serve_frontend():
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "version": "2.0.0"}
+    return {"status": "ok", "version": "2.1.0"}
 
 
 # ── Models ────────────────────────────────────────────────────────────────
 
 @app.get("/api/models")
 async def list_models(url: str = DEFAULT_URL):
-    """Fetch available models from the VLM server."""
     try:
         client = _get_client(url)
         models = client.models.list()
@@ -401,30 +534,19 @@ async def list_models(url: str = DEFAULT_URL):
 
 # ── File Preview ──────────────────────────────────────────────────────────
 
-PREVIEW_DPI = 100  # low-res thumbnails, enough for preview
-MAX_PREVIEW_PAGES = 20  # cap to avoid huge responses
+PREVIEW_DPI = 100
+MAX_PREVIEW_PAGES = 20
 
 
 @app.post("/api/preview")
-async def preview_file(
-    file: UploadFile = File(...),
-):
-    """
-    Generate a preview of an uploaded file.
-    - Images: returned as a single base64 thumbnail.
-    - PDFs: each page rendered as a base64 thumbnail (up to MAX_PREVIEW_PAGES).
-    """
+async def preview_file(file: UploadFile = File(...)):
     contents = await file.read()
     ext = os.path.splitext(file.filename or "")[1].lower()
 
     if ext not in IMAGE_EXTENSIONS and ext not in PDF_EXTENSIONS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported file type '{ext}'",
-        )
+        raise HTTPException(status_code=400, detail=f"Unsupported file type '{ext}'")
 
     if ext in IMAGE_EXTENSIONS:
-        # Return the image itself as base64
         b64 = base64.b64encode(contents).decode("utf-8")
         return {
             "type": "image",
@@ -433,7 +555,6 @@ async def preview_file(
             "thumbnails": [f"data:image/png;base64,{b64}"],
         }
 
-    # PDF — render pages as thumbnails
     try:
         doc = fitz.open(stream=contents, filetype="pdf")
         total = len(doc)
@@ -469,10 +590,6 @@ async def start_ocr(
     page_spec: str = Form("all"),
     background_tasks: BackgroundTasks = BackgroundTasks(),
 ):
-    """
-    Upload a file and start an OCR job.
-    Returns a job_id to poll for status.
-    """
     if not model:
         raise HTTPException(status_code=400, detail="Model is required")
 
@@ -512,7 +629,6 @@ async def start_ocr(
 
 @app.get("/api/status/{job_id}")
 async def get_job_status(job_id: str):
-    """Poll the status of an OCR job."""
     with jobs_lock:
         job = jobs.get(job_id)
     if not job:
@@ -520,13 +636,96 @@ async def get_job_status(job_id: str):
     return job.to_dict()
 
 
-# ── SSE Stream (real-time progress) ───────────────────────────────────────
+# ── Per-Page Status ───────────────────────────────────────────────────────
+
+@app.get("/api/pages/{job_id}")
+async def get_page_results(job_id: str):
+    """
+    Return per-page processing results for a job.
+    Each entry contains: page_num, markdown, model, method, status, error_msg.
+    """
+    with jobs_lock:
+        job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    results = []
+    for pn in sorted(job.page_results.keys()):
+        results.append(job.page_results[pn].to_dict())
+    return {"job_id": job_id, "total_pages": job.total_pages, "pages": results}
+
+
+# ── Reprocess Single Page ────────────────────────────────────────────────
+
+@app.post("/api/reprocess/{job_id}")
+async def reprocess_page(
+    job_id: str,
+    page_num: int = Form(1),
+    model: str = Form(""),
+    url: str = Form(DEFAULT_URL),
+    dpi: int = Form(150),
+):
+    """
+    Reprocess a single page of an existing PDF job with a (possibly different) model.
+    The page's markdown result is replaced in-place.
+    """
+    if not model:
+        raise HTTPException(status_code=400, detail="Model is required")
+
+    with jobs_lock:
+        job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if not job.file_bytes:
+        raise HTTPException(status_code=400, detail="No PDF data available for reprocessing")
+
+    if page_num < 1 or page_num > job.total_pages:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Page {page_num} is out of range (1-{job.total_pages})",
+        )
+
+    # Open the stored PDF and process the requested page
+    try:
+        doc = fitz.open(stream=job.file_bytes, filetype="pdf")
+        page_idx = page_num - 1
+
+        _add_log(job_id, f"[Reprocess] Page {page_num} with model {model}...")
+        _ensure_page_result(job_id, page_num)
+        _update_page_result(job_id, page_num, status="processing")
+
+        page = doc[page_idx]
+        pix = page.get_pixmap(dpi=dpi)
+        page_bytes = pix.tobytes("png")
+
+        result = _send_page_to_vlm(page_bytes, model, url)
+        _update_page_result(
+            job_id, page_num,
+            markdown=result, model=model,
+            method="vlm", status="done",
+        )
+        _add_log(job_id, f"[Success] Page {page_num} reprocessed with {model}")
+
+        # Rewrite merged output
+        output_path = _write_merged_output(job_id)
+        _add_log(job_id, f"[Success] Merged output saved to {output_path}")
+
+        return {
+            "status": "ok",
+            "page_num": page_num,
+            "model": model,
+            "output_path": output_path,
+        }
+    except Exception as exc:
+        _add_log(job_id, f"[Error] Reprocess page {page_num}: {exc}")
+        _update_page_result(job_id, page_num, status="error", error_msg=str(exc))
+        raise HTTPException(status_code=500, detail=f"Reprocess failed: {exc}")
+
+
+# ── SSE Stream ────────────────────────────────────────────────────────────
 
 async def event_stream(job_id: str):
-    """
-    Server-Sent Events stream: push job updates to the client
-    until the job finishes or errors.
-    """
     end_statuses = {"done", "error"}
     while True:
         with jobs_lock:
@@ -543,7 +742,6 @@ async def event_stream(job_id: str):
 
 @app.get("/api/stream/{job_id}")
 async def stream_status(job_id: str):
-    """SSE endpoint for real-time job progress."""
     return StreamingResponse(
         event_stream(job_id),
         media_type="text/event-stream",
@@ -554,25 +752,31 @@ async def stream_status(job_id: str):
     )
 
 
-# ── Download result ───────────────────────────────────────────────────────
+# ── Download result (merged on-the-fly) ───────────────────────────────────
 
 @app.get("/api/download/{job_id}")
 async def download_result(job_id: str):
-    """Download the OCR output file for a completed job."""
+    """
+    Download the OCR output.  The merged markdown is regenerated on-the-fly
+    from all per-page results so that any reprocessed pages are included.
+    """
     with jobs_lock:
         job = jobs.get(job_id)
     if not job:
-        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found. The server may have restarted.")
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
     if job.status in ("pending", "processing"):
-        raise HTTPException(status_code=409, detail=f"Job '{job_id}' is still {job.status}. Please wait.")
+        raise HTTPException(status_code=409, detail=f"Job '{job_id}' is still {job.status}.")
     if job.status == "error":
         raise HTTPException(status_code=422, detail=f"Job failed: {job.message}")
-    if not job.output_path or not os.path.isfile(job.output_path):
-        raise HTTPException(status_code=404, detail="No output file available. The file may have been cleaned up.")
 
-    filename = os.path.basename(job.output_path)
+    # Regenerate merged output from current page results
+    output_path = _write_merged_output(job_id)
+    if not output_path or not os.path.isfile(output_path):
+        raise HTTPException(status_code=404, detail="No output file available.")
+
+    filename = os.path.basename(output_path)
     return FileResponse(
-        path=job.output_path,
+        path=output_path,
         filename=filename,
         media_type="text/markdown",
     )

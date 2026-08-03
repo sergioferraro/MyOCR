@@ -381,6 +381,106 @@ header h1 {
   padding: 8px 0;
 }
 
+/* ── Per-Page Results List ─────────────────────────────────────── */
+.page-results-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.page-result-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.15s;
+}
+
+.page-result-item:hover {
+  border-color: var(--accent);
+  background: rgba(233, 69, 96, 0.05);
+}
+
+.page-result-item.active {
+  border-color: var(--accent);
+  background: rgba(233, 69, 96, 0.1);
+}
+
+.page-result-item .page-num {
+  font-weight: 600;
+  font-size: 0.82rem;
+  color: var(--text-primary);
+  min-width: 28px;
+  text-align: center;
+}
+
+.page-result-item .page-meta {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.page-result-item .page-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.page-status-dot.done { background: var(--success); }
+.page-status-dot.error { background: var(--error); }
+.page-status-dot.processing { background: var(--warning); }
+.page-status-dot.skipped { background: var(--text-muted); }
+.page-status-dot.pending { background: var(--border); }
+
+.page-result-item .btn-reprocess {
+  padding: 3px 8px;
+  font-size: 0.7rem;
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: border-color 0.2s;
+}
+
+.page-result-item .btn-reprocess:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+/* ── Reprocess Modal ───────────────────────────────────────────── */
+.reprocess-field {
+  margin: 12px 0;
+}
+
+.reprocess-field select {
+  width: 100%;
+  padding: 9px 12px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 0.88rem;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.reprocess-field select:focus {
+  border-color: var(--accent);
+}
+
 /* ── Preview Container (Source Pane) ───────────────────────────── */
 .preview-container {
   flex: 1;

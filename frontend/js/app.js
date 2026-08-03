@@ -45,6 +45,17 @@ const sidebarActions    = $('#sidebarActions');
 const btnDownload       = $('#btnDownload');
 const btnNewOcr         = $('#btnNewOcr');
 
+// Per-page results
+const pageResultsPanel  = $('#pageResultsPanel');
+const pageResultsList   = $('#pageResultsList');
+
+// Reprocess modal
+const reprocessModal        = $('#reprocessModal');
+const reprocessPageNum      = $('#reprocessPageNum');
+const reprocessModelSelect  = $('#reprocessModelSelect');
+const btnConfirmReprocess   = $('#btnConfirmReprocess');
+const btnCloseReprocess     = $('#btnCloseReprocess');
+
 // Webcam modals
 const webcamModal       = $('#webcamModal');
 const webcamVideo       = $('#webcamVideo');
@@ -82,6 +93,11 @@ let webcamStream = null;
 let webcamFacingMode = 'user';
 let webcamCapturedPages = [];
 let webcamSessionId = '';
+
+// Per-page state
+let pageResults = [];       // array of { page_num, markdown, model, method, status, error_msg }
+let selectedPageNum = null; // which page's markdown is shown in result pane
+let isViewingAll = true;    // true = merged view, false = single page view
 
 // ── Page Selection Toggle ────────────────────────────────────────
 function syncPageRangeInput() {
@@ -678,16 +694,17 @@ async function onJobDone(data) {
 
   setResultStatus(`✅ ${data.processed_pages} pagine elaborate`, 'success');
 
-  // Fetch and render markdown in result pane
-  try {
-    const res = await fetch(`/api/download/${currentJobId}`);
-    if (res.ok) {
-      const text = await res.text();
-      renderMarkdown(text);
-    }
-  } catch (err) {
-    console.error('Failed to fetch result:', err);
-  }
+  // Fetch per-page results
+  await fetchPageResults();
+
+  // Show page results list in sidebar
+  renderPageResultsList();
+  show(pageResultsPanel);
+
+  // Show merged markdown by default
+  isViewingAll = true;
+  selectedPageNum = null;
+  await renderMergedMarkdown();
 
   // Show action buttons in sidebar
   show(sidebarActions);
@@ -700,6 +717,154 @@ function onJobError(data) {
 
   setResultStatus(`❌ ${data.message || 'Errore sconosciuto'}`, 'error');
 }
+
+// ── Fetch Per-Page Results ───────────────────────────────────────
+async function fetchPageResults() {
+  try {
+    const res = await fetch(`/api/pages/${currentJobId}`);
+    if (res.ok) {
+      const data = await res.json();
+      pageResults = data.pages || [];
+    }
+  } catch (err) {
+    console.error('Failed to fetch page results:', err);
+    pageResults = [];
+  }
+}
+
+// ── Render Per-Page Results List ─────────────────────────────────
+function renderPageResultsList() {
+  pageResultsList.innerHTML = '';
+
+  // "View All" button
+  const allBtn = document.createElement('div');
+  allBtn.className = 'page-result-item' + (isViewingAll ? ' active' : '');
+  allBtn.innerHTML = `
+    <span class="page-num">📄</span>
+    <span class="page-meta">Visualizza tutto (merge)</span>
+    <span class="page-status-dot done"></span>
+  `;
+  allBtn.addEventListener('click', async () => {
+    isViewingAll = true;
+    selectedPageNum = null;
+    renderPageResultsList(); // update active state
+    await renderMergedMarkdown();
+  });
+  pageResultsList.appendChild(allBtn);
+
+  // Individual page items
+  pageResults.forEach((pr) => {
+    const item = document.createElement('div');
+    item.className = 'page-result-item' + (selectedPageNum === pr.page_num ? ' active' : '');
+
+    const methodLabel = pr.method === 'vlm' ? 'VLM' : pr.method === 'text_extract' ? 'TXT' : pr.method === 'skipped' ? '—' : '?';
+    const modelLabel = pr.model && pr.model !== '(text-extract)' ? pr.model.substring(0, 30) : '';
+
+    item.innerHTML = `
+      <span class="page-num">${pr.page_num}</span>
+      <span class="page-meta">${methodLabel}${modelLabel ? ' · ' + modelLabel : ''}</span>
+      <span class="page-status-dot ${pr.status}"></span>
+      ${pr.status === 'done' ? `<button class="btn-reprocess" data-page="${pr.page_num}">🔄</button>` : ''}
+    `;
+
+    // Click on the row → show that page's markdown
+    item.addEventListener('click', async (e) => {
+      if (e.target.classList.contains('btn-reprocess')) return; // let the button handle itself
+      isViewingAll = false;
+      selectedPageNum = pr.page_num;
+      renderPageResultsList(); // update active state
+      renderMarkdown(pr.markdown || '<!-- pagina non processata -->');
+    });
+
+    // Reprocess button
+    const reprocessBtn = item.querySelector('.btn-reprocess');
+    if (reprocessBtn) {
+      reprocessBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openReprocessModal(pr.page_num);
+      });
+    }
+
+    pageResultsList.appendChild(item);
+  });
+}
+
+// ── Render Merged Markdown ──────────────────────────────────────
+async function renderMergedMarkdown() {
+  try {
+    const res = await fetch(`/api/download/${currentJobId}`);
+    if (res.ok) {
+      const text = await res.text();
+      renderMarkdown(text);
+    }
+  } catch (err) {
+    console.error('Failed to fetch merged result:', err);
+  }
+}
+
+// ── Reprocess Modal ─────────────────────────────────────────────
+let reprocessTargetPage = null;
+
+function openReprocessModal(pageNum) {
+  reprocessTargetPage = pageNum;
+  reprocessPageNum.textContent = `#${pageNum}`;
+
+  // Populate model select with current models
+  const currentModels = Array.from(modelSelect.options).map(o => o.value).filter(v => v);
+  reprocessModelSelect.innerHTML = '<option value="">— Seleziona modello —</option>';
+  currentModels.forEach(m => {
+    const opt = document.createElement('option');
+    opt.value = m;
+    opt.textContent = m;
+    reprocessModelSelect.appendChild(opt);
+  });
+
+  show(reprocessModal);
+}
+
+btnConfirmReprocess.addEventListener('click', async () => {
+  const model = reprocessModelSelect.value;
+  if (!model) { alert('Seleziona un modello.'); return; }
+
+  btnConfirmReprocess.disabled = true;
+  btnConfirmReprocess.textContent = '⏳ Riprocessando...';
+
+  try {
+    const formData = new FormData();
+    formData.append('page_num', String(reprocessTargetPage));
+    formData.append('model', model);
+    formData.append('url', serverUrlInput.value.trim());
+    formData.append('dpi', dpiSelect.value);
+
+    const res = await fetch(`/api/reprocess/${currentJobId}`, { method: 'POST', body: formData });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Reprocess failed');
+    }
+
+    // Refresh page results
+    await fetchPageResults();
+    renderPageResultsList();
+
+    // Re-render the current view
+    if (isViewingAll) {
+      await renderMergedMarkdown();
+    } else {
+      const pr = pageResults.find(p => p.page_num === selectedPageNum);
+      if (pr) renderMarkdown(pr.markdown);
+    }
+
+    hide(reprocessModal);
+  } catch (err) {
+    alert(`Errore riprocessamento: ${err.message}`);
+  } finally {
+    btnConfirmReprocess.disabled = false;
+    btnConfirmReprocess.textContent = '🔄 Riprocessa';
+  }
+});
+
+btnCloseReprocess.addEventListener('click', () => hide(reprocessModal));
+reprocessModal.querySelector('.modal-overlay').addEventListener('click', () => hide(reprocessModal));
 
 // ── Download Result ──────────────────────────────────────────────
 btnDownload.addEventListener('click', async () => {
@@ -735,10 +900,14 @@ btnNewOcr.addEventListener('click', () => {
   currentJobId = null;
   webcamCapturedPages = [];
   webcamSessionId = '';
+  pageResults = [];
+  selectedPageNum = null;
+  isViewingAll = true;
   hide(fileInfo);
   hide(btnStart);
   hide(progressPanel);
   hide(logPanel);
+  hide(pageResultsPanel);
   hide(sidebarActions);
   clearLogs();
   clearMarkdown();
