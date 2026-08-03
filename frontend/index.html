@@ -7,202 +7,208 @@
   <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
-  <div class="container">
-    <!-- Header -->
-    <header>
-      <h1>🔍 Local OCR</h1>
-      <p class="subtitle">Vision Language Model — LM Studio</p>
-    </header>
+  <!-- Header -->
+  <header>
+    <h1>🔍 Local OCR</h1>
+    <p class="subtitle">Vision Language Model — LM Studio</p>
+  </header>
 
-    <!-- Settings Panel -->
-    <section class="panel">
-      <h2>⚙️ Impostazioni</h2>
-      <div class="settings-grid">
-        <div class="field">
-          <label for="serverUrl">Server URL</label>
-          <input type="text" id="serverUrl" placeholder="http://localhost:1234" value="http://localhost:1234">
-        </div>
-        <div class="field">
-          <label for="modelSelect">Modello</label>
-          <div class="model-row">
-            <select id="modelSelect">
-              <option value="">— Carica modelli —</option>
+  <div class="app-layout">
+    <!-- ── Sidebar ──────────────────────────────────────────────── -->
+    <aside class="sidebar">
+      <!-- Settings Panel -->
+      <section class="panel">
+        <h2>⚙️ Impostazioni</h2>
+        <div class="settings-grid">
+          <div class="field">
+            <label for="serverUrl">Server URL</label>
+            <input type="text" id="serverUrl" placeholder="http://localhost:1234" value="http://localhost:1234">
+          </div>
+          <div class="field">
+            <label for="modelSelect">Modello</label>
+            <div class="model-row">
+              <select id="modelSelect">
+                <option value="">— Carica modelli —</option>
+              </select>
+              <button id="btnRefreshModels" class="btn-small">⟳</button>
+            </div>
+          </div>
+          <div class="field">
+            <label for="dpiSelect">PDF DPI</label>
+            <select id="dpiSelect">
+              <option value="100">100</option>
+              <option value="150" selected>150</option>
+              <option value="200">200</option>
+              <option value="300">300</option>
             </select>
-            <button id="btnRefreshModels" class="btn-small">⟳ Modelli</button>
           </div>
-        </div>
-        <div class="field">
-          <label for="dpiSelect">PDF DPI</label>
-          <select id="dpiSelect">
-            <option value="100">100</option>
-            <option value="150" selected>150</option>
-            <option value="200">200</option>
-            <option value="300">300</option>
-          </select>
-        </div>
-        <div class="field checkbox-field">
-          <label class="checkbox-label">
-            <input type="checkbox" id="forceVlm">
-            <span>Force VLM (tutte le pagine al VLM)</span>
-          </label>
-        </div>
-        <div class="field page-selection-field">
-          <label>Pagine da processare</label>
-          <div class="page-selection">
-            <label class="radio-label">
-              <input type="radio" name="pageMode" value="all" checked>
-              <span>Tutte</span>
+          <div class="field checkbox-field">
+            <label class="checkbox-label">
+              <input type="checkbox" id="forceVlm">
+              <span>Force VLM</span>
             </label>
-            <label class="radio-label">
-              <input type="radio" name="pageMode" value="custom">
-              <span>Intervallo</span>
-            </label>
-            <input type="text" id="pageRangeInput" placeholder="es. 1-5,8,12-15" class="hidden">
           </div>
-          <p class="page-hint">Usa virgole per pagine singole e trattini per intervalli</p>
-        </div>
-      </div>
-    </section>
-
-    <!-- File Upload -->
-    <section class="panel">
-      <h2>📄 File</h2>
-      <div class="file-options">
-        <button id="btnWebcam" class="btn-secondary">
-          📷 Scatta Foto (Webcam)
-        </button>
-      </div>
-      <div id="dropZone" class="drop-zone">
-        <div class="drop-zone-inner">
-          <span class="drop-icon">📁</span>
-          <p>Trascina qui il file oppure <button id="btnBrowse" class="btn-text">sfoglia</button></p>
-          <p class="hint">PDF, PNG, JPG, JPEG, WebP</p>
-        </div>
-        <input type="file" id="fileInput" accept=".pdf,.png,.jpg,.jpeg,.webp,image/*" hidden>
-      </div>
-      <div id="fileInfo" class="file-info hidden">
-        <span id="fileName"></span>
-        <span id="fileSize"></span>
-      </div>
-      <button id="btnStart" class="btn-primary hidden">🚀 Avvia OCR</button>
-    </section>
-
-    <!-- File Preview -->
-    <section class="panel hidden" id="previewPanel">
-      <h2>👁 Anteprima File</h2>
-      <div class="preview-controls">
-        <span id="previewInfo" class="preview-info"></span>
-        <div class="preview-nav">
-          <button id="btnPrevPage" class="btn-small hidden">◀</button>
-          <span id="previewPageLabel" class="hidden"></span>
-          <button id="btnNextPage" class="btn-small hidden">▶</button>
-        </div>
-      </div>
-      <div id="previewContainer" class="preview-container"></div>
-    </section>
-
-    <!-- Progress -->
-    <section class="panel hidden" id="progressPanel">
-      <h2>📊 Progresso</h2>
-      <div class="progress-bar-container">
-        <div id="progressBar" class="progress-bar"><div class="progress-fill"></div></div>
-      </div>
-      <p id="progressText">In attesa...</p>
-    </section>
-
-    <!-- Log -->
-    <section class="panel hidden" id="logPanel">
-      <h2>📋 Log</h2>
-      <div id="logBox" class="log-box"></div>
-    </section>
-
-    <!-- Result -->
-    <section class="panel hidden" id="resultPanel">
-      <h2>✅ Risultato</h2>
-      <p id="resultMessage"></p>
-      <div class="result-actions">
-        <button id="btnDownload" class="btn-secondary">⬇ Scarica Markdown</button>
-        <button id="btnPreview" class="btn-secondary">👁 Anteprima Markdown</button>
-        <button id="btnNewOcr" class="btn-secondary">🔄 Nuovo OCR</button>
-      </div>
-    </section>
-
-    <!-- Webcam Preview Modal -->
-    <div id="webcamModal" class="modal hidden">
-      <div class="modal-overlay"></div>
-      <div class="modal-content webcam-modal-content">
-        <div class="modal-header">
-          <h3>📷 Anteprima Webcam</h3>
-          <button id="btnCloseWebcam" class="btn-close">&times;</button>
-        </div>
-        <div class="webcam-preview-body">
-          <video id="webcamVideo" autoplay playsinline></video>
-          <canvas id="webcamCanvas" class="hidden"></canvas>
-          <div class="webcam-controls">
-            <button id="btnCapturePhoto" class="btn-primary">📸 Scatta Foto</button>
-            <button id="btnSwitchCamera" class="btn-secondary">🔄 Cambia Camera</button>
+          <div class="field page-selection-field">
+            <label>Pagine da processare</label>
+            <div class="page-selection">
+              <label class="radio-label">
+                <input type="radio" name="pageMode" value="all" checked>
+                <span>Tutte</span>
+              </label>
+              <label class="radio-label">
+                <input type="radio" name="pageMode" value="custom">
+                <span>Intervallo</span>
+              </label>
+              <input type="text" id="pageRangeInput" placeholder="es. 1-5,8" class="hidden">
+            </div>
           </div>
         </div>
-      </div>
-    </div>
+      </section>
 
-    <!-- Add More Pages Modal -->
-    <div id="addPagesModal" class="modal hidden">
-      <div class="modal-overlay"></div>
-      <div class="modal-content dialog-modal-content">
-        <div class="modal-header">
-          <h3>📄 Pagine Acquisite</h3>
-          <button id="btnCloseAddPages" class="btn-close">&times;</button>
+      <!-- File Upload -->
+      <section class="panel">
+        <h2>📄 File</h2>
+        <div class="file-options">
+          <button id="btnWebcam" class="btn-secondary">
+            📷 Scatta Foto (Webcam)
+          </button>
         </div>
-        <div class="dialog-body">
-          <p>Acquisita <strong>1 nuova pagina</strong>. Totale: <span id="webcamPageCount">1</span> pagine.</p>
-          <div id="webcamThumbnails" class="webcam-thumbnails"></div>
-          <div class="dialog-actions">
-            <button id="btnAddMorePages" class="btn-secondary">➕ Aggiungi altra pagina</button>
-            <button id="btnDoneCapturing" class="btn-primary">✅ Ho finito</button>
+        <div id="dropZone" class="drop-zone">
+          <div class="drop-zone-inner">
+            <span class="drop-icon">📁</span>
+            <p>Trascina qui il file oppure <button id="btnBrowse" class="btn-text">sfoglia</button></p>
+            <p class="hint">PDF, PNG, JPG, JPEG, WebP</p>
+          </div>
+          <input type="file" id="fileInput" accept=".pdf,.png,.jpg,.jpeg,.webp,image/*" hidden>
+        </div>
+        <div id="fileInfo" class="file-info hidden">
+          <span id="fileName"></span>
+          <span id="fileSize"></span>
+        </div>
+        <button id="btnStart" class="btn-primary hidden">🚀 Avvia OCR</button>
+      </section>
+
+      <!-- Progress -->
+      <section class="panel hidden" id="progressPanel">
+        <h2>📊 Progresso</h2>
+        <div class="progress-bar-container">
+          <div id="progressBar" class="progress-bar"><div class="progress-fill"></div></div>
+        </div>
+        <p id="progressText">In attesa...</p>
+      </section>
+
+      <!-- Log -->
+      <section class="panel hidden" id="logPanel">
+        <h2>📋 Log</h2>
+        <div id="logBox" class="log-box"></div>
+      </section>
+
+      <!-- Action buttons -->
+      <div class="sidebar-actions hidden" id="sidebarActions">
+        <button id="btnDownload" class="btn-secondary btn-full">⬇ Scarica Markdown</button>
+        <button id="btnNewOcr" class="btn-secondary btn-full">🔄 Nuovo OCR</button>
+      </div>
+    </aside>
+
+    <!-- ── Main Area (Split View) ───────────────────────────────── -->
+    <main class="main-area">
+      <!-- Left: Source Preview -->
+      <section class="split-pane source-pane">
+        <div class="pane-header">
+          <h2>📄 Sorgente</h2>
+          <div class="preview-nav">
+            <button id="btnPrevPage" class="btn-small hidden">◀</button>
+            <span id="previewPageLabel" class="hidden"></span>
+            <button id="btnNextPage" class="btn-small hidden">▶</button>
           </div>
         </div>
-      </div>
-    </div>
-
-    <!-- Rename Output Modal -->
-    <div id="renameModal" class="modal hidden">
-      <div class="modal-overlay"></div>
-      <div class="modal-content dialog-modal-content">
-        <div class="modal-header">
-          <h3>✏️ Nome file di output</h3>
-          <button id="btnCloseRename" class="btn-close">&times;</button>
-        </div>
-        <div class="dialog-body">
-          <p>Inserisci un nome per il file Markdown risultante:</p>
-          <div class="rename-field">
-            <input type="text" id="renameInput" placeholder="es. documento_ocr">
-            <span class="rename-ext">.md</span>
-          </div>
-          <div class="dialog-actions">
-            <button id="btnConfirmRename" class="btn-primary">🚀 Avvia OCR</button>
+        <div id="previewContainer" class="preview-container">
+          <div class="preview-placeholder">
+            <span class="placeholder-icon">📄</span>
+            <p>Nessun file caricato</p>
           </div>
         </div>
-      </div>
-    </div>
+      </section>
 
-    <!-- Preview Modal -->
-    <div id="previewModal" class="modal hidden">
-      <div class="modal-overlay"></div>
-      <div class="modal-content">
-        <div class="modal-header">
-          <h3>Anteprima Markdown</h3>
-          <button id="btnCloseModal" class="btn-close">&times;</button>
+      <!-- Right: Markdown Result -->
+      <section class="split-pane result-pane">
+        <div class="pane-header">
+          <h2>✅ Risultato Markdown</h2>
+          <span id="resultStatus" class="result-status hidden"></span>
         </div>
-        <div id="previewBody" class="preview-body"></div>
-      </div>
-    </div>
-
-    <!-- Footer -->
-    <footer>
-      <p>Local OCR v2.0 · FastAPI + VLM</p>
-    </footer>
+        <div id="markdownContainer" class="markdown-container">
+          <div class="preview-placeholder">
+            <span class="placeholder-icon">📝</span>
+            <p>Il risultato OCR apparirà qui</p>
+          </div>
+        </div>
+      </section>
+    </main>
   </div>
+
+  <!-- ── Webcam Preview Modal ─────────────────────────────────── -->
+  <div id="webcamModal" class="modal hidden">
+    <div class="modal-overlay"></div>
+    <div class="modal-content webcam-modal-content">
+      <div class="modal-header">
+        <h3>📷 Anteprima Webcam</h3>
+        <button id="btnCloseWebcam" class="btn-close">&times;</button>
+      </div>
+      <div class="webcam-preview-body">
+        <video id="webcamVideo" autoplay playsinline></video>
+        <canvas id="webcamCanvas" class="hidden"></canvas>
+        <div class="webcam-controls">
+          <button id="btnCapturePhoto" class="btn-primary">📸 Scatta Foto</button>
+          <button id="btnSwitchCamera" class="btn-secondary">🔄 Cambia Camera</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Add More Pages Modal ─────────────────────────────────── -->
+  <div id="addPagesModal" class="modal hidden">
+    <div class="modal-overlay"></div>
+    <div class="modal-content dialog-modal-content">
+      <div class="modal-header">
+        <h3>📄 Pagine Acquisite</h3>
+        <button id="btnCloseAddPages" class="btn-close">&times;</button>
+      </div>
+      <div class="dialog-body">
+        <p>Acquisita <strong>1 nuova pagina</strong>. Totale: <span id="webcamPageCount">1</span> pagine.</p>
+        <div id="webcamThumbnails" class="webcam-thumbnails"></div>
+        <div class="dialog-actions">
+          <button id="btnAddMorePages" class="btn-secondary">➕ Aggiungi altra pagina</button>
+          <button id="btnDoneCapturing" class="btn-primary">✅ Ho finito</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Rename Output Modal ──────────────────────────────────── -->
+  <div id="renameModal" class="modal hidden">
+    <div class="modal-overlay"></div>
+    <div class="modal-content dialog-modal-content">
+      <div class="modal-header">
+        <h3>✏️ Nome file di output</h3>
+        <button id="btnCloseRename" class="btn-close">&times;</button>
+      </div>
+      <div class="dialog-body">
+        <p>Inserisci un nome per il file Markdown risultante:</p>
+        <div class="rename-field">
+          <input type="text" id="renameInput" placeholder="es. documento_ocr">
+          <span class="rename-ext">.md</span>
+        </div>
+        <div class="dialog-actions">
+          <button id="btnConfirmRename" class="btn-primary">🚀 Avvia OCR</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <footer>
+    <p>Local OCR v2.0 · FastAPI + VLM</p>
+  </footer>
 
   <!-- Markdown parser (lightweight) -->
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>

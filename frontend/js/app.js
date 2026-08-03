@@ -1,6 +1,6 @@
-/* ── Local OCR — Frontend Controller ─────────────────────────────
- * Handles file upload, OCR job lifecycle, SSE progress streaming,
- * result download, and Markdown preview.
+/* ── Local OCR — Frontend Controller (Sidebar + Split View) ──────
+ * Sidebar: Impostazioni, File, Progresso, Log
+ * Main area: sorgente (sinistra) ↔ risultato markdown (destra)
  * ──────────────────────────────────────────────────────────────── */
 
 // ── DOM refs ─────────────────────────────────────────────────────
@@ -22,30 +22,49 @@ const fileName          = $('#fileName');
 const fileSize          = $('#fileSize');
 const btnStart          = $('#btnStart');
 
-// Preview panel
-const previewPanel      = $('#previewPanel');
-const previewInfo       = $('#previewInfo');
+// Preview (source pane)
 const previewContainer  = $('#previewContainer');
 const btnPrevPage       = $('#btnPrevPage');
 const btnNextPage       = $('#btnNextPage');
 const previewPageLabel  = $('#previewPageLabel');
 
+// Result pane
+const markdownContainer = $('#markdownContainer');
+const resultStatus      = $('#resultStatus');
+
+// Progress & Log (sidebar)
 const progressPanel     = $('#progressPanel');
 const progressBarFill   = $('.progress-fill');
 const progressText      = $('#progressText');
-
 const logPanel          = $('#logPanel');
 const logBox            = $('#logBox');
 
-const resultPanel       = $('#resultPanel');
-const resultMessage     = $('#resultMessage');
+// Sidebar actions
+const sidebarActions    = $('#sidebarActions');
 const btnDownload       = $('#btnDownload');
-const btnPreview        = $('#btnPreview');
 const btnNewOcr         = $('#btnNewOcr');
 
-const previewModal      = $('#previewModal');
-const previewBody       = $('#previewBody');
-const btnCloseModal     = $('#btnCloseModal');
+// Webcam modals
+const webcamModal       = $('#webcamModal');
+const webcamVideo       = $('#webcamVideo');
+const webcamCanvas      = $('#webcamCanvas');
+const btnCapturePhoto   = $('#btnCapturePhoto');
+const btnSwitchCamera   = $('#btnSwitchCamera');
+const btnCloseWebcam    = $('#btnCloseWebcam');
+
+// Add pages modal
+const addPagesModal     = $('#addPagesModal');
+const webcamPageCount   = $('#webcamPageCount');
+const webcamThumbnails  = $('#webcamThumbnails');
+const btnAddMorePages   = $('#btnAddMorePages');
+const btnDoneCapturing  = $('#btnDoneCapturing');
+const btnCloseAddPages  = $('#btnCloseAddPages');
+
+// Rename modal
+const renameModal       = $('#renameModal');
+const renameInput       = $('#renameInput');
+const btnConfirmRename  = $('#btnConfirmRename');
+const btnCloseRename    = $('#btnCloseRename');
 
 // ── State ────────────────────────────────────────────────────────
 let selectedFile = null;
@@ -56,6 +75,12 @@ let eventSource  = null;
 let previewThumbnails = [];
 let previewPage = 0;
 let previewTotal = 0;
+
+// Webcam state
+let webcamStream = null;
+let webcamFacingMode = 'user';
+let webcamCapturedPages = [];
+let webcamSessionId = '';
 
 // ── Page Selection Toggle ────────────────────────────────────────
 document.querySelectorAll('input[name="pageMode"]').forEach((radio) => {
@@ -107,6 +132,36 @@ function setProgress(pct, text) {
   progressText.textContent = text;
 }
 
+function setResultStatus(text, type) {
+  resultStatus.textContent = text;
+  resultStatus.className = 'result-status ' + type;
+  show(resultStatus);
+}
+
+function clearResultStatus() {
+  hide(resultStatus);
+}
+
+// ── Render Markdown in result pane ───────────────────────────────
+function renderMarkdown(text) {
+  if (typeof marked !== 'undefined') {
+    markdownContainer.classList.add('rendered');
+    markdownContainer.innerHTML = marked.parse(text);
+  } else {
+    markdownContainer.classList.remove('rendered');
+    markdownContainer.textContent = text;
+  }
+}
+
+function clearMarkdown() {
+  markdownContainer.innerHTML = `
+    <div class="preview-placeholder">
+      <span class="placeholder-icon">📝</span>
+      <p>Il risultato OCR apparirà qui</p>
+    </div>`;
+  markdownContainer.classList.remove('rendered');
+}
+
 // ── Refresh Models ───────────────────────────────────────────────
 async function refreshModels() {
   const url = serverUrlInput.value.trim();
@@ -133,7 +188,7 @@ async function refreshModels() {
     alert(`Errore caricamento modelli: ${err.message}`);
   } finally {
     btnRefreshModels.disabled = false;
-    btnRefreshModels.textContent = '⟳ Modelli';
+    btnRefreshModels.textContent = '⟳';
   }
 }
 
@@ -171,34 +226,6 @@ fileInput.addEventListener('change', () => {
 });
 
 // ── Webcam Capture (con anteprima live + multi-pagina) ──────────
-let webcamStream = null;
-let webcamFacingMode = 'user'; // 'user' (front) o 'environment' (back)
-
-// Raccolta pagine webcam
-let webcamCapturedPages = []; // array di { blob, dataUrl, pageNum }
-let webcamSessionId = '';    // nome casuale della sessione
-
-const webcamModal       = $('#webcamModal');
-const webcamVideo       = $('#webcamVideo');
-const webcamCanvas      = $('#webcamCanvas');
-const btnCapturePhoto   = $('#btnCapturePhoto');
-const btnSwitchCamera   = $('#btnSwitchCamera');
-const btnCloseWebcam    = $('#btnCloseWebcam');
-
-// Modali aggiuntivi
-const addPagesModal     = $('#addPagesModal');
-const webcamPageCount   = $('#webcamPageCount');
-const webcamThumbnails  = $('#webcamThumbnails');
-const btnAddMorePages   = $('#btnAddMorePages');
-const btnDoneCapturing  = $('#btnDoneCapturing');
-const btnCloseAddPages  = $('#btnCloseAddPages');
-
-const renameModal       = $('#renameModal');
-const renameInput       = $('#renameInput');
-const btnConfirmRename  = $('#btnConfirmRename');
-const btnCloseRename    = $('#btnCloseRename');
-
-// ── Genera ID sessione casuale ───────────────────────────────────
 function generateSessionId() {
   const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
   let result = '';
@@ -206,9 +233,7 @@ function generateSessionId() {
   return `webcam_${result}`;
 }
 
-// ── Apri webcam (primo avvio o aggiungi pagina) ──────────────────
 function openWebcam() {
-  // Al primo avvio, genera l'ID sessione e pulisce le pagine
   if (webcamCapturedPages.length === 0) {
     webcamSessionId = generateSessionId();
   }
@@ -223,16 +248,13 @@ function openWebcam() {
     }
 
     try {
-      // Ferma stream precedente se attivo
       if (webcamStream) {
         webcamStream.getTracks().forEach(track => track.stop());
         webcamStream = null;
       }
 
-      // Apri il modale
       show(webcamModal);
 
-      // Richiedi accesso camera
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: webcamFacingMode }
       });
@@ -245,15 +267,15 @@ function openWebcam() {
       console.error('Webcam error:', err);
       hide(webcamModal);
 
-      let errorMsg = 'Errore durante l\'accesso alla webcam:\n';
+      let errorMsg = "Errore durante l'accesso alla webcam:\n";
       if (err.name === 'NotAllowedError') {
-        errorMsg += 'Permesso negato. Assicurati di aver autorizzato l\'uso della camera nel browser.';
+        errorMsg += 'Permesso negato. Assicurati di aver autorizzato l\'uso della camera.';
       } else if (err.name === 'NotFoundError') {
         errorMsg += 'Nessuna webcam rilevata sul dispositivo.';
       } else if (err.name === 'NotReadableError') {
-        errorMsg += 'Impossibile accedere alla webcam. Potrebbe essere in uso da altri applicativi.';
+        errorMsg += 'Impossibile accedere alla webcam. Potrebbe essere in uso.';
       } else if (err.name === 'SecurityError') {
-        errorMsg += 'Errore di sicurezza: la webcam non è accessibile in questo contesto.';
+        errorMsg += 'Errore di sicurezza: la webcam non è accessibile.';
       } else {
         errorMsg += err.message || 'Errore sconosciuto';
       }
@@ -263,44 +285,35 @@ function openWebcam() {
   });
 }
 
-// ── Cattura foto dal feed live ───────────────────────────────────
 btnCapturePhoto.addEventListener('click', async () => {
   if (!webcamStream) return;
 
-  // Disegna frame corrente sul canvas
   webcamCanvas.width  = webcamVideo.videoWidth;
   webcamCanvas.height = webcamVideo.videoHeight;
   const ctx = webcamCanvas.getContext('2d');
   ctx.drawImage(webcamVideo, 0, 0, webcamCanvas.width, webcamCanvas.height);
 
-  // Converte in blob
   const blob = await new Promise(resolve => {
     webcamCanvas.toBlob(resolve, 'image/jpeg', 0.95);
   });
 
-  // Genera data URL per l'anteprima
   const dataUrl = webcamCanvas.toDataURL('image/jpeg', 0.9);
 
-  // Salva nella raccolta
   const pageNum = webcamCapturedPages.length + 1;
   webcamCapturedPages.push({ blob, dataUrl, pageNum });
 
-  // Ferma stream e chiudi modale webcam
   webcamStream.getTracks().forEach(track => track.stop());
   webcamStream = null;
   webcamVideo.srcObject = null;
   hide(webcamModal);
 
-  // Mostra modale "aggiungi pagine"
   showAddPagesModal();
 });
 
-// ── Mostra modale "aggiungi altre pagine" ────────────────────────
 function showAddPagesModal() {
   const total = webcamCapturedPages.length;
   webcamPageCount.textContent = total;
 
-  // Aggiorna thumbnails
   webcamThumbnails.innerHTML = '';
   webcamCapturedPages.forEach((page) => {
     const img = document.createElement('img');
@@ -312,7 +325,6 @@ function showAddPagesModal() {
   show(addPagesModal);
 }
 
-// ── Aggiungi altra pagina (torna alla webcam) ────────────────────
 btnAddMorePages.addEventListener('click', async () => {
   hide(addPagesModal);
 
@@ -330,47 +342,36 @@ btnAddMorePages.addEventListener('click', async () => {
   }
 });
 
-// ── Fatto: passa al rename ───────────────────────────────────────
 btnDoneCapturing.addEventListener('click', () => {
   hide(addPagesModal);
   showRenameModal();
 });
 
-// ── Chiudi modale "aggiungi pagine" ──────────────────────────────
 btnCloseAddPages.addEventListener('click', () => {
   hide(addPagesModal);
 });
 
-// ── Mostra modale "rinomina file" ────────────────────────────────
 function showRenameModal() {
-  // Pre-riempie con l'ID sessione
   renameInput.value = webcamSessionId;
   show(renameModal);
-  // Focus sull'input e seleziona il testo per modificarlo facilmente
-  setTimeout(() => renameInput.focus(), 100);
-  renameInput.select();
+  setTimeout(() => { renameInput.focus(); renameInput.select(); }, 100);
 }
 
-// ── Conferma rename → avvia OCR ─────────────────────────────────
 btnConfirmRename.addEventListener('click', async () => {
-  const outputName = renameInput.value.trim().replace(/[^a-zA-Z0-9àèéìòùÀÈÉÌÒÙ_\-\s]/g, '_');
+  const outputName = renameInput.value.trim().replace(/[^a-zA-Z0-9àèéìòùÀÈÉÌÒÙ_\- \s]/g, '_');
   if (!outputName) {
     alert('Inserisci un nome per il file.');
     return;
   }
 
   hide(renameModal);
-
-  // Combina le immagini catturate in un unico PDF
   await buildWebcamPdf(outputName);
 });
 
-// ── Chiudi modale "rinomina" ────────────────────────────────────
 btnCloseRename.addEventListener('click', () => {
   hide(renameModal);
 });
 
-// ── Combina immagini in PDF (jsPDF) ─────────────────────────────
 async function buildWebcamPdf(outputName) {
   try {
     const { jsPDF } = window.jspdf;
@@ -378,17 +379,13 @@ async function buildWebcamPdf(outputName) {
 
     for (let i = 0; i < webcamCapturedPages.length; i++) {
       const page = webcamCapturedPages[i];
-
-      // Carica l'immagine come elemento Image
       const img = new Image();
       img.src = page.dataUrl;
 
       await new Promise((resolve, reject) => {
         img.onload = () => {
-          // Aggiungi una nuova pagina per ogni immagine (tranne la prima)
           if (i > 0) doc.addPage();
 
-          // Calcola dimensioni per adattare all'A4 (210x297 mm)
           const pageWidth = doc.internal.pageSize.getWidth();
           const pageHeight = doc.internal.pageSize.getHeight();
           const imgRatio = img.width / img.height;
@@ -413,20 +410,15 @@ async function buildWebcamPdf(outputName) {
       });
     }
 
-    // Genera blob PDF
     const pdfBlob = doc.output('blob');
     const pdfFile = new File([pdfBlob], `${outputName}.pdf`, { type: 'application/pdf' });
 
-    // Pulisci raccolta webcam
     webcamCapturedPages = [];
-
-    // Passa il PDF al flusso OCR normale
     handleFile(pdfFile);
 
   } catch (err) {
     console.error('PDF build error:', err);
     alert('Errore nella generazione del PDF dalle immagini catturate.');
-    // Fallback: usa solo la prima immagine
     if (webcamCapturedPages.length > 0) {
       const first = webcamCapturedPages[0];
       const fallbackFile = new File([first.blob], `${outputName}.jpg`, { type: 'image/jpeg' });
@@ -436,18 +428,13 @@ async function buildWebcamPdf(outputName) {
   }
 }
 
-// ── Cambia camera (front/back) ───────────────────────────────────
 btnSwitchCamera.addEventListener('click', async () => {
   if (!webcamStream) return;
 
   try {
-    // Ferma stream corrente
     webcamStream.getTracks().forEach(track => track.stop());
-
-    // Alterna facing mode
     webcamFacingMode = webcamFacingMode === 'user' ? 'environment' : 'user';
 
-    // Riapri stream con la camera opposta
     const stream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: webcamFacingMode }
     });
@@ -462,7 +449,6 @@ btnSwitchCamera.addEventListener('click', async () => {
   }
 });
 
-// ── Chiudi modale webcam ─────────────────────────────────────────
 function closeWebcamModal() {
   if (webcamStream) {
     webcamStream.getTracks().forEach(track => track.stop());
@@ -474,14 +460,12 @@ function closeWebcamModal() {
 
 btnCloseWebcam.addEventListener('click', closeWebcamModal);
 webcamModal.querySelector('.modal-overlay').addEventListener('click', closeWebcamModal);
-
-// ── Chiudi modali overlay ────────────────────────────────────────
 addPagesModal.querySelector('.modal-overlay').addEventListener('click', () => hide(addPagesModal));
 renameModal.querySelector('.modal-overlay').addEventListener('click', () => hide(renameModal));
 
-// ── Init: avvia listener webcam ──────────────────────────────────
 openWebcam();
 
+// ── Handle File (common) ─────────────────────────────────────────
 function handleFile(file) {
   const allowed = ['.pdf', '.png', '.jpg', '.jpeg', '.webp'];
   const ext = '.' + file.name.split('.').pop().toLowerCase();
@@ -497,11 +481,11 @@ function handleFile(file) {
   show(fileInfo);
   show(btnStart);
 
-  // Load preview
+  // Load preview in source pane
   loadPreview(file);
 }
 
-// ── File Preview ─────────────────────────────────────────────
+// ── File Preview (Source Pane) ───────────────────────────────────
 async function loadPreview(file) {
   previewThumbnails = [];
   previewPage = 0;
@@ -519,10 +503,6 @@ async function loadPreview(file) {
     previewTotal = previewThumbnails.length;
     previewPage = 0;
 
-    // Update info
-    const typeLabel = data.type === 'pdf' ? `PDF — ${data.pages} pag.` : 'Immagine';
-    previewInfo.textContent = `${file.name} · ${formatBytes(file.size)} · ${typeLabel}`;
-
     // Show/hide navigation
     if (previewTotal > 1) {
       show(btnPrevPage);
@@ -535,10 +515,8 @@ async function loadPreview(file) {
     }
 
     showPreviewPage();
-    show(previewPanel);
   } catch (err) {
     console.error('Preview error:', err);
-    hide(previewPanel);
   }
 }
 
@@ -578,11 +556,12 @@ btnStart.addEventListener('click', async () => {
   btnStart.disabled = true;
   btnStart.textContent = '⏳ Elaborazione...';
   clearLogs();
-  hide(resultPanel);
-  hide(previewPanel);
+  clearMarkdown();
   show(progressPanel);
   show(logPanel);
+  hide(sidebarActions);
   setProgress(0, 'Invio file...');
+  setResultStatus('In elaborazione...', 'processing');
 
   const formData = new FormData();
   formData.append('file', selectedFile);
@@ -600,13 +579,13 @@ btnStart.addEventListener('click', async () => {
     addLog(`Job avviato: ${currentJobId}`, 'info');
     setProgress(5, 'Connessione al server VLM...');
 
-    // Start SSE stream
     connectSSE(currentJobId);
   } catch (err) {
     addLog(`Errore: ${err.message}`, 'error');
     btnStart.disabled = false;
     btnStart.textContent = '🚀 Avvia OCR';
     hide(progressPanel);
+    clearResultStatus();
   }
 });
 
@@ -620,13 +599,11 @@ function connectSSE(jobId) {
     try {
       const data = JSON.parse(e.data);
 
-      // Update progress
       const pct = data.total_pages > 0
         ? Math.round((data.processed_pages / data.total_pages) * 100)
         : 0;
       setProgress(pct, `${data.processed_pages}/${data.total_pages} pagine elaborate`);
 
-      // Append new log lines (track how many we've already shown)
       const newLogs = data.logs || [];
       if (typeof window._ocrLogsShown === 'undefined') {
         window._ocrLogsShown = 0;
@@ -641,7 +618,6 @@ function connectSSE(jobId) {
       }
       window._ocrLogsShown = newLogs.length;
 
-      // Check final status
       if (data.status === 'done') {
         eventSource.close();
         eventSource = null;
@@ -659,12 +635,11 @@ function connectSSE(jobId) {
   eventSource.onerror = () => {
     eventSource.close();
     eventSource = null;
-    // Fallback: poll status
     pollStatus(jobId);
   };
 }
 
-// ── Fallback polling (if SSE disconnects) ────────────────────────
+// ── Fallback polling ─────────────────────────────────────────────
 async function pollStatus(jobId) {
   const interval = setInterval(async () => {
     try {
@@ -693,13 +668,26 @@ async function pollStatus(jobId) {
 }
 
 // ── Job Complete ─────────────────────────────────────────────────
-function onJobDone(data) {
+async function onJobDone(data) {
   btnStart.disabled = false;
   btnStart.textContent = '🚀 Avvia OCR';
   setProgress(100, 'Completato!');
 
-  resultMessage.textContent = `✅ OCR completato — ${data.processed_pages} pagine elaborate`;
-  show(resultPanel);
+  setResultStatus(`✅ ${data.processed_pages} pagine elaborate`, 'success');
+
+  // Fetch and render markdown in result pane
+  try {
+    const res = await fetch(`/api/download/${currentJobId}`);
+    if (res.ok) {
+      const text = await res.text();
+      renderMarkdown(text);
+    }
+  } catch (err) {
+    console.error('Failed to fetch result:', err);
+  }
+
+  // Show action buttons in sidebar
+  show(sidebarActions);
 }
 
 function onJobError(data) {
@@ -707,9 +695,7 @@ function onJobError(data) {
   btnStart.textContent = '🚀 Avvia OCR';
   setProgress(0, 'Errore');
 
-  resultMessage.textContent = `❌ Errore: ${data.message || 'Sconosciuto'}`;
-  resultMessage.style.color = 'var(--error)';
-  show(resultPanel);
+  setResultStatus(`❌ ${data.message || 'Errore sconosciuto'}`, 'error');
 }
 
 // ── Download Result ──────────────────────────────────────────────
@@ -727,7 +713,10 @@ btnDownload.addEventListener('click', async () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${currentJobId}_extracted.md`;
+
+    // Derive filename from the original file name
+    const stem = selectedFile ? selectedFile.name.replace(/\.[^.]+$/, '') : `ocr_${currentJobId}`;
+    a.download = `${stem}.md`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -737,25 +726,6 @@ btnDownload.addEventListener('click', async () => {
   }
 });
 
-// ── Markdown Preview ─────────────────────────────────────────────
-btnPreview.addEventListener('click', async () => {
-  if (!currentJobId) return;
-
-  try {
-    const res = await fetch(`/api/download/${currentJobId}`);
-    const text = await res.text();
-    previewBody.innerHTML = typeof marked !== 'undefined'
-      ? marked.parse(text)
-      : `<pre style="white-space:pre-wrap">${text}</pre>`;
-    show(previewModal);
-  } catch (err) {
-    alert(`Errore caricamento anteprima: ${err.message}`);
-  }
-});
-
-btnCloseModal.addEventListener('click', () => hide(previewModal));
-previewModal.querySelector('.modal-overlay').addEventListener('click', () => hide(previewModal));
-
 // ── Reset for new OCR ────────────────────────────────────────────
 btnNewOcr.addEventListener('click', () => {
   selectedFile = null;
@@ -764,16 +734,25 @@ btnNewOcr.addEventListener('click', () => {
   webcamSessionId = '';
   hide(fileInfo);
   hide(btnStart);
-  hide(previewPanel);
   hide(progressPanel);
   hide(logPanel);
-  hide(resultPanel);
+  hide(sidebarActions);
   clearLogs();
+  clearMarkdown();
+  clearResultStatus();
   setProgress(0, '');
-  resultMessage.style.color = '';
   fileInput.value = '';
+
+  // Reset source pane
+  previewContainer.innerHTML = `
+    <div class="preview-placeholder">
+      <span class="placeholder-icon">📄</span>
+      <p>Nessun file caricato</p>
+    </div>`;
+  hide(btnPrevPage);
+  hide(btnNextPage);
+  hide(previewPageLabel);
 });
 
 // ── Init ─────────────────────────────────────────────────────────
-// Auto-refresh models on load
 refreshModels();
