@@ -31,6 +31,7 @@ const previewPageLabel  = $('#previewPageLabel');
 // Result pane (zero-md)
 const zeroMdResult      = $('#zeroMdResult');
 const zeroMdScript      = $('#zeroMdScript');
+const resultPlaceholder = $('#resultPlaceholder');
 const resultStatus      = $('#resultStatus');
 
 // Progress & Log (sidebar)
@@ -147,7 +148,8 @@ function clearResultStatus() {
 function renderMarkdown(text) {
   // Set markdown content in the zero-md script tag
   zeroMdScript.textContent = text;
-  // Show the zero-md element and hide placeholder
+  // Hide placeholder, show zero-md
+  hide(resultPlaceholder);
   show(zeroMdResult);
   // Trigger render
   zeroMdResult.render().catch(err => {
@@ -156,9 +158,10 @@ function renderMarkdown(text) {
 }
 
 function clearMarkdown() {
-  // Clear content and hide zero-md
+  // Clear content, hide zero-md, show placeholder
   zeroMdScript.textContent = '';
   hide(zeroMdResult);
+  show(resultPlaceholder);
 }
 
 // ── Refresh Models ───────────────────────────────────────────────
