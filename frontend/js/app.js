@@ -28,8 +28,9 @@ const btnPrevPage       = $('#btnPrevPage');
 const btnNextPage       = $('#btnNextPage');
 const previewPageLabel  = $('#previewPageLabel');
 
-// Result pane
-const markdownContainer = $('#markdownContainer');
+// Result pane (zero-md)
+const zeroMdResult      = $('#zeroMdResult');
+const zeroMdScript      = $('#zeroMdScript');
 const resultStatus      = $('#resultStatus');
 
 // Progress & Log (sidebar)
@@ -142,24 +143,22 @@ function clearResultStatus() {
   hide(resultStatus);
 }
 
-// ── Render Markdown in result pane ───────────────────────────────
+// ── Render Markdown in result pane (via zero-md) ────────────────
 function renderMarkdown(text) {
-  if (typeof marked !== 'undefined') {
-    markdownContainer.classList.add('rendered');
-    markdownContainer.innerHTML = marked.parse(text);
-  } else {
-    markdownContainer.classList.remove('rendered');
-    markdownContainer.textContent = text;
-  }
+  // Set markdown content in the zero-md script tag
+  zeroMdScript.textContent = text;
+  // Show the zero-md element and hide placeholder
+  show(zeroMdResult);
+  // Trigger render
+  zeroMdResult.render().catch(err => {
+    console.error('zero-md render error:', err);
+  });
 }
 
 function clearMarkdown() {
-  markdownContainer.innerHTML = `
-    <div class="preview-placeholder">
-      <span class="placeholder-icon">📝</span>
-      <p>Il risultato OCR apparirà qui</p>
-    </div>`;
-  markdownContainer.classList.remove('rendered');
+  // Clear content and hide zero-md
+  zeroMdScript.textContent = '';
+  hide(zeroMdResult);
 }
 
 // ── Refresh Models ───────────────────────────────────────────────

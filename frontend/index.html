@@ -136,11 +136,51 @@
           <h2>✅ Risultato Markdown</h2>
           <span id="resultStatus" class="result-status hidden"></span>
         </div>
-        <div id="markdownContainer" class="markdown-container">
+        <div class="markdown-container">
           <div class="preview-placeholder">
             <span class="placeholder-icon">📝</span>
             <p>Il risultato OCR apparirà qui</p>
           </div>
+          <!-- zero-md: renders markdown with math (KaTeX), mermaid, syntax highlighting -->
+          <zero-md id="zeroMdResult" class="hidden" no-auto>
+            <template>
+              <!-- Dark theme styles matching our app -->
+              <style>
+                :host { display: block; }
+                .markdown-body {
+                  font-size: 0.88rem !important;
+                  line-height: 1.7 !important;
+                  color: var(--text-primary) !important;
+                  background: transparent !important;
+                }
+                .markdown-body h1, .markdown-body h2, .markdown-body h3 {
+                  color: #569cd6 !important;
+                }
+                .markdown-body a {
+                  color: var(--accent) !important;
+                }
+                .markdown-body code {
+                  background: var(--bg-card) !important;
+                }
+                .markdown-body pre {
+                  background: var(--bg-card) !important;
+                }
+                .markdown-body table th {
+                  background: var(--bg-card) !important;
+                }
+                .markdown-body blockquote {
+                  border-left-color: var(--accent) !important;
+                }
+              </style>
+              <!-- GitHub markdown base -->
+              <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/github-markdown-css@5/github-markdown.min.css" />
+              <!-- Highlight.js dark theme -->
+              <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11/styles/github-dark.min.css" />
+              <!-- KaTeX for math -->
+              <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0/dist/katex.min.css" />
+            </template>
+            <script type="text/markdown" id="zeroMdScript"></script>
+          </zero-md>
         </div>
       </section>
     </main>
@@ -210,8 +250,8 @@
     <p>Local OCR v2.0 · FastAPI + VLM</p>
   </footer>
 
-  <!-- Markdown parser (lightweight) -->
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <!-- zero-md: markdown renderer with KaTeX math, Mermaid diagrams, syntax highlighting -->
+  <script type="module" src="https://cdn.jsdelivr.net/npm/zero-md@3?register"></script>
   <!-- jsPDF for multi-page webcam capture -->
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
   <script src="/static/js/app.js"></script>
