@@ -146,6 +146,46 @@
       </div>
     </div>
 
+    <!-- Add More Pages Modal -->
+    <div id="addPagesModal" class="modal hidden">
+      <div class="modal-overlay"></div>
+      <div class="modal-content dialog-modal-content">
+        <div class="modal-header">
+          <h3>📄 Pagine Acquisite</h3>
+          <button id="btnCloseAddPages" class="btn-close">&times;</button>
+        </div>
+        <div class="dialog-body">
+          <p>Acquisita <strong>1 nuova pagina</strong>. Totale: <span id="webcamPageCount">1</span> pagine.</p>
+          <div id="webcamThumbnails" class="webcam-thumbnails"></div>
+          <div class="dialog-actions">
+            <button id="btnAddMorePages" class="btn-secondary">➕ Aggiungi altra pagina</button>
+            <button id="btnDoneCapturing" class="btn-primary">✅ Ho finito</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Rename Output Modal -->
+    <div id="renameModal" class="modal hidden">
+      <div class="modal-overlay"></div>
+      <div class="modal-content dialog-modal-content">
+        <div class="modal-header">
+          <h3>✏️ Nome file di output</h3>
+          <button id="btnCloseRename" class="btn-close">&times;</button>
+        </div>
+        <div class="dialog-body">
+          <p>Inserisci un nome per il file Markdown risultante:</p>
+          <div class="rename-field">
+            <input type="text" id="renameInput" placeholder="es. documento_ocr">
+            <span class="rename-ext">.md</span>
+          </div>
+          <div class="dialog-actions">
+            <button id="btnConfirmRename" class="btn-primary">🚀 Avvia OCR</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Preview Modal -->
     <div id="previewModal" class="modal hidden">
       <div class="modal-overlay"></div>
@@ -166,6 +206,8 @@
 
   <!-- Markdown parser (lightweight) -->
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <!-- jsPDF for multi-page webcam capture -->
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
   <script src="/static/js/app.js"></script>
 </body>
 </html>

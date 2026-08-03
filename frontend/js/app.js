@@ -170,65 +170,98 @@ fileInput.addEventListener('change', () => {
   }
 });
 
-// ── Webcam Capture (con anteprima live) ─────────────────────────
+// ── Webcam Capture (con anteprima live + multi-pagina) ──────────
 let webcamStream = null;
 let webcamFacingMode = 'user'; // 'user' (front) o 'environment' (back)
 
-const webcamModal     = $('#webcamModal');
-const webcamVideo     = $('#webcamVideo');
-const webcamCanvas    = $('#webcamCanvas');
-const btnCapturePhoto = $('#btnCapturePhoto');
-const btnSwitchCamera = $('#btnSwitchCamera');
-const btnCloseWebcam  = $('#btnCloseWebcam');
+// Raccolta pagine webcam
+let webcamCapturedPages = []; // array di { blob, dataUrl, pageNum }
+let webcamSessionId = '';    // nome casuale della sessione
 
-btnWebcam.addEventListener('click', async () => {
-  const mediaApiAvailable = navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === 'function';
-  if (!mediaApiAvailable) {
-    alert("Errore: la webcam non è supportata in questo contesto.\n" +
-          "Assicurati che il server sia raggiungibile via HTTPS o localhost (non IP).\n" +
-          "Il browser richiede un contesto sicuro per accedere alla camera.");
-    return;
+const webcamModal       = $('#webcamModal');
+const webcamVideo       = $('#webcamVideo');
+const webcamCanvas      = $('#webcamCanvas');
+const btnCapturePhoto   = $('#btnCapturePhoto');
+const btnSwitchCamera   = $('#btnSwitchCamera');
+const btnCloseWebcam    = $('#btnCloseWebcam');
+
+// Modali aggiuntivi
+const addPagesModal     = $('#addPagesModal');
+const webcamPageCount   = $('#webcamPageCount');
+const webcamThumbnails  = $('#webcamThumbnails');
+const btnAddMorePages   = $('#btnAddMorePages');
+const btnDoneCapturing  = $('#btnDoneCapturing');
+const btnCloseAddPages  = $('#btnCloseAddPages');
+
+const renameModal       = $('#renameModal');
+const renameInput       = $('#renameInput');
+const btnConfirmRename  = $('#btnConfirmRename');
+const btnCloseRename    = $('#btnCloseRename');
+
+// ── Genera ID sessione casuale ───────────────────────────────────
+function generateSessionId() {
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  let result = '';
+  for (let i = 0; i < 8; i++) result += chars[Math.floor(Math.random() * chars.length)];
+  return `webcam_${result}`;
+}
+
+// ── Apri webcam (primo avvio o aggiungi pagina) ──────────────────
+function openWebcam() {
+  // Al primo avvio, genera l'ID sessione e pulisce le pagine
+  if (webcamCapturedPages.length === 0) {
+    webcamSessionId = generateSessionId();
   }
 
-  try {
-    // Ferma stream precedente se attivo
-    if (webcamStream) {
-      webcamStream.getTracks().forEach(track => track.stop());
-      webcamStream = null;
+  btnWebcam.addEventListener('click', async () => {
+    const mediaApiAvailable = navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === 'function';
+    if (!mediaApiAvailable) {
+      alert("Errore: la webcam non è supportata in questo contesto.\n" +
+            "Assicurati che il server sia raggiungibile via HTTPS o localhost (non IP).\n" +
+            "Il browser richiede un contesto sicuro per accedere alla camera.");
+      return;
     }
 
-    // Apri il modale
-    show(webcamModal);
+    try {
+      // Ferma stream precedente se attivo
+      if (webcamStream) {
+        webcamStream.getTracks().forEach(track => track.stop());
+        webcamStream = null;
+      }
 
-    // Richiedi accesso camera
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: webcamFacingMode }
-    });
+      // Apri il modale
+      show(webcamModal);
 
-    webcamStream = stream;
-    webcamVideo.srcObject = stream;
-    webcamVideo.play();
+      // Richiedi accesso camera
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: webcamFacingMode }
+      });
 
-  } catch (err) {
-    console.error('Webcam error:', err);
-    hide(webcamModal);
+      webcamStream = stream;
+      webcamVideo.srcObject = stream;
+      webcamVideo.play();
 
-    let errorMsg = 'Errore durante l\'accesso alla webcam:\n';
-    if (err.name === 'NotAllowedError') {
-      errorMsg += 'Permesso negato. Assicurati di aver autorizzato l\'uso della camera nel browser.';
-    } else if (err.name === 'NotFoundError') {
-      errorMsg += 'Nessuna webcam rilevata sul dispositivo.';
-    } else if (err.name === 'NotReadableError') {
-      errorMsg += 'Impossibile accedere alla webcam. Potrebbe essere in uso da altri applicativi.';
-    } else if (err.name === 'SecurityError') {
-      errorMsg += 'Errore di sicurezza: la webcam non è accessibile in questo contesto.';
-    } else {
-      errorMsg += err.message || 'Errore sconosciuto';
+    } catch (err) {
+      console.error('Webcam error:', err);
+      hide(webcamModal);
+
+      let errorMsg = 'Errore durante l\'accesso alla webcam:\n';
+      if (err.name === 'NotAllowedError') {
+        errorMsg += 'Permesso negato. Assicurati di aver autorizzato l\'uso della camera nel browser.';
+      } else if (err.name === 'NotFoundError') {
+        errorMsg += 'Nessuna webcam rilevata sul dispositivo.';
+      } else if (err.name === 'NotReadableError') {
+        errorMsg += 'Impossibile accedere alla webcam. Potrebbe essere in uso da altri applicativi.';
+      } else if (err.name === 'SecurityError') {
+        errorMsg += 'Errore di sicurezza: la webcam non è accessibile in questo contesto.';
+      } else {
+        errorMsg += err.message || 'Errore sconosciuto';
+      }
+
+      alert(errorMsg);
     }
-
-    alert(errorMsg);
-  }
-});
+  });
+}
 
 // ── Cattura foto dal feed live ───────────────────────────────────
 btnCapturePhoto.addEventListener('click', async () => {
@@ -240,25 +273,168 @@ btnCapturePhoto.addEventListener('click', async () => {
   const ctx = webcamCanvas.getContext('2d');
   ctx.drawImage(webcamVideo, 0, 0, webcamCanvas.width, webcamCanvas.height);
 
-  // Converte in blob → File
+  // Converte in blob
   const blob = await new Promise(resolve => {
     webcamCanvas.toBlob(resolve, 'image/jpeg', 0.95);
   });
 
-  const now = new Date();
-  const pad = (n) => String(n).padStart(2, '0');
-  const filename = `webcam_capture_${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.jpg`;
-  const capturedFile = new File([blob], filename, { type: 'image/jpeg' });
+  // Genera data URL per l'anteprima
+  const dataUrl = webcamCanvas.toDataURL('image/jpeg', 0.9);
 
-  // Ferma stream e chiudi modale
+  // Salva nella raccolta
+  const pageNum = webcamCapturedPages.length + 1;
+  webcamCapturedPages.push({ blob, dataUrl, pageNum });
+
+  // Ferma stream e chiudi modale webcam
   webcamStream.getTracks().forEach(track => track.stop());
   webcamStream = null;
   webcamVideo.srcObject = null;
   hide(webcamModal);
 
-  // Passa il file al flusso OCR
-  handleFile(capturedFile);
+  // Mostra modale "aggiungi pagine"
+  showAddPagesModal();
 });
+
+// ── Mostra modale "aggiungi altre pagine" ────────────────────────
+function showAddPagesModal() {
+  const total = webcamCapturedPages.length;
+  webcamPageCount.textContent = total;
+
+  // Aggiorna thumbnails
+  webcamThumbnails.innerHTML = '';
+  webcamCapturedPages.forEach((page) => {
+    const img = document.createElement('img');
+    img.src = page.dataUrl;
+    img.alt = `Pagina ${page.pageNum}`;
+    webcamThumbnails.appendChild(img);
+  });
+
+  show(addPagesModal);
+}
+
+// ── Aggiungi altra pagina (torna alla webcam) ────────────────────
+btnAddMorePages.addEventListener('click', async () => {
+  hide(addPagesModal);
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: webcamFacingMode }
+    });
+    webcamStream = stream;
+    webcamVideo.srcObject = stream;
+    webcamVideo.play();
+    show(webcamModal);
+  } catch (err) {
+    console.error('Webcam re-open error:', err);
+    alert('Impossibile riaprire la webcam.');
+  }
+});
+
+// ── Fatto: passa al rename ───────────────────────────────────────
+btnDoneCapturing.addEventListener('click', () => {
+  hide(addPagesModal);
+  showRenameModal();
+});
+
+// ── Chiudi modale "aggiungi pagine" ──────────────────────────────
+btnCloseAddPages.addEventListener('click', () => {
+  hide(addPagesModal);
+});
+
+// ── Mostra modale "rinomina file" ────────────────────────────────
+function showRenameModal() {
+  // Pre-riempie con l'ID sessione
+  renameInput.value = webcamSessionId;
+  show(renameModal);
+  // Focus sull'input e seleziona il testo per modificarlo facilmente
+  setTimeout(() => renameInput.focus(), 100);
+  renameInput.select();
+}
+
+// ── Conferma rename → avvia OCR ─────────────────────────────────
+btnConfirmRename.addEventListener('click', async () => {
+  const outputName = renameInput.value.trim().replace(/[^a-zA-Z0-9àèéìòùÀÈÉÌÒÙ_\-\s]/g, '_');
+  if (!outputName) {
+    alert('Inserisci un nome per il file.');
+    return;
+  }
+
+  hide(renameModal);
+
+  // Combina le immagini catturate in un unico PDF
+  await buildWebcamPdf(outputName);
+});
+
+// ── Chiudi modale "rinomina" ────────────────────────────────────
+btnCloseRename.addEventListener('click', () => {
+  hide(renameModal);
+});
+
+// ── Combina immagini in PDF (jsPDF) ─────────────────────────────
+async function buildWebcamPdf(outputName) {
+  try {
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF();
+
+    for (let i = 0; i < webcamCapturedPages.length; i++) {
+      const page = webcamCapturedPages[i];
+
+      // Carica l'immagine come elemento Image
+      const img = new Image();
+      img.src = page.dataUrl;
+
+      await new Promise((resolve, reject) => {
+        img.onload = () => {
+          // Aggiungi una nuova pagina per ogni immagine (tranne la prima)
+          if (i > 0) doc.addPage();
+
+          // Calcola dimensioni per adattare all'A4 (210x297 mm)
+          const pageWidth = doc.internal.pageSize.getWidth();
+          const pageHeight = doc.internal.pageSize.getHeight();
+          const imgRatio = img.width / img.height;
+          const pageRatio = pageWidth / pageHeight;
+
+          let drawW, drawH;
+          if (imgRatio > pageRatio) {
+            drawW = pageWidth;
+            drawH = pageWidth / imgRatio;
+          } else {
+            drawH = pageHeight;
+            drawW = pageHeight * imgRatio;
+          }
+
+          const offsetX = (pageWidth - drawW) / 2;
+          const offsetY = (pageHeight - drawH) / 2;
+
+          doc.addImage(img, 'JPEG', offsetX, offsetY, drawW, drawH);
+          resolve();
+        };
+        img.onerror = reject;
+      });
+    }
+
+    // Genera blob PDF
+    const pdfBlob = doc.output('blob');
+    const pdfFile = new File([pdfBlob], `${outputName}.pdf`, { type: 'application/pdf' });
+
+    // Pulisci raccolta webcam
+    webcamCapturedPages = [];
+
+    // Passa il PDF al flusso OCR normale
+    handleFile(pdfFile);
+
+  } catch (err) {
+    console.error('PDF build error:', err);
+    alert('Errore nella generazione del PDF dalle immagini catturate.');
+    // Fallback: usa solo la prima immagine
+    if (webcamCapturedPages.length > 0) {
+      const first = webcamCapturedPages[0];
+      const fallbackFile = new File([first.blob], `${outputName}.jpg`, { type: 'image/jpeg' });
+      webcamCapturedPages = [];
+      handleFile(fallbackFile);
+    }
+  }
+}
 
 // ── Cambia camera (front/back) ───────────────────────────────────
 btnSwitchCamera.addEventListener('click', async () => {
@@ -298,6 +474,13 @@ function closeWebcamModal() {
 
 btnCloseWebcam.addEventListener('click', closeWebcamModal);
 webcamModal.querySelector('.modal-overlay').addEventListener('click', closeWebcamModal);
+
+// ── Chiudi modali overlay ────────────────────────────────────────
+addPagesModal.querySelector('.modal-overlay').addEventListener('click', () => hide(addPagesModal));
+renameModal.querySelector('.modal-overlay').addEventListener('click', () => hide(renameModal));
+
+// ── Init: avvia listener webcam ──────────────────────────────────
+openWebcam();
 
 function handleFile(file) {
   const allowed = ['.pdf', '.png', '.jpg', '.jpeg', '.webp'];
@@ -577,6 +760,8 @@ previewModal.querySelector('.modal-overlay').addEventListener('click', () => hid
 btnNewOcr.addEventListener('click', () => {
   selectedFile = null;
   currentJobId = null;
+  webcamCapturedPages = [];
+  webcamSessionId = '';
   hide(fileInfo);
   hide(btnStart);
   hide(previewPanel);
