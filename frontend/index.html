@@ -127,6 +127,25 @@
       </div>
     </section>
 
+    <!-- Webcam Preview Modal -->
+    <div id="webcamModal" class="modal hidden">
+      <div class="modal-overlay"></div>
+      <div class="modal-content webcam-modal-content">
+        <div class="modal-header">
+          <h3>📷 Anteprima Webcam</h3>
+          <button id="btnCloseWebcam" class="btn-close">&times;</button>
+        </div>
+        <div class="webcam-preview-body">
+          <video id="webcamVideo" autoplay playsinline></video>
+          <canvas id="webcamCanvas" class="hidden"></canvas>
+          <div class="webcam-controls">
+            <button id="btnCapturePhoto" class="btn-primary">📸 Scatta Foto</button>
+            <button id="btnSwitchCamera" class="btn-secondary">🔄 Cambia Camera</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Preview Modal -->
     <div id="previewModal" class="modal hidden">
       <div class="modal-overlay"></div>

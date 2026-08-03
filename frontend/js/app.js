@@ -170,77 +170,50 @@ fileInput.addEventListener('change', () => {
   }
 });
 
-// ── Webcam Capture ───────────────────────────────────────────────
+// ── Webcam Capture (con anteprima live) ─────────────────────────
 let webcamStream = null;
+let webcamFacingMode = 'user'; // 'user' (front) o 'environment' (back)
+
+const webcamModal     = $('#webcamModal');
+const webcamVideo     = $('#webcamVideo');
+const webcamCanvas    = $('#webcamCanvas');
+const btnCapturePhoto = $('#btnCapturePhoto');
+const btnSwitchCamera = $('#btnSwitchCamera');
+const btnCloseWebcam  = $('#btnCloseWebcam');
 
 btnWebcam.addEventListener('click', async () => {
-  // Check if camera API is available
   const mediaApiAvailable = navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === 'function';
-  
   if (!mediaApiAvailable) {
     alert("Errore: la webcam non è supportata in questo contesto.\n" +
           "Assicurati che il server sia raggiungibile via HTTPS o localhost (non IP).\n" +
           "Il browser richiede un contesto sicuro per accedere alla camera.");
     return;
   }
-  
+
   try {
-    // Stop any existing stream
+    // Ferma stream precedente se attivo
     if (webcamStream) {
       webcamStream.getTracks().forEach(track => track.stop());
+      webcamStream = null;
     }
 
-    // Request camera access
-    const stream = await navigator.mediaDevices.getUserMedia({ 
-      video: { facingMode: 'user' }  // 'user' for front camera, 'environment' for back
+    // Apri il modale
+    show(webcamModal);
+
+    // Richiedi accesso camera
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: webcamFacingMode }
     });
-    
+
     webcamStream = stream;
-    
-    // Create temporary video element for capture
-    const video = document.createElement('video');
-    video.style.display = 'none';
-    video.srcObject = stream;
-    document.body.appendChild(video);
-    
-    // Wait for video to be ready
-    await new Promise((resolve) => {
-      video.onloadedmetadata = () => {
-        video.play();
-        resolve();
-      };
-    });
-    
-    // Create canvas to capture frame
-    const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    
-    // Convert to blob
-    const blob = await new Promise(resolve => {
-      canvas.toBlob(resolve, 'image/jpeg', 0.95);
-    });
-    
-    // Create file from blob
-    const now = new Date();
-    const filename = `webcam_capture_${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}.jpg`;
-    const capturedFile = new File([blob], filename, { type: 'image/jpeg' });
-    
-    // Clean up
-    document.body.removeChild(video);
-    if (stream) {
-      stream.getTracks().forEach(track => track.stop());
-    }
-    
-    // Handle the captured file
-    handleFile(capturedFile);
-    
+    webcamVideo.srcObject = stream;
+    webcamVideo.play();
+
   } catch (err) {
     console.error('Webcam error:', err);
+    hide(webcamModal);
+
     let errorMsg = 'Errore durante l\'accesso alla webcam:\n';
-    
     if (err.name === 'NotAllowedError') {
       errorMsg += 'Permesso negato. Assicurati di aver autorizzato l\'uso della camera nel browser.';
     } else if (err.name === 'NotFoundError') {
@@ -252,10 +225,79 @@ btnWebcam.addEventListener('click', async () => {
     } else {
       errorMsg += err.message || 'Errore sconosciuto';
     }
-    
+
     alert(errorMsg);
   }
 });
+
+// ── Cattura foto dal feed live ───────────────────────────────────
+btnCapturePhoto.addEventListener('click', async () => {
+  if (!webcamStream) return;
+
+  // Disegna frame corrente sul canvas
+  webcamCanvas.width  = webcamVideo.videoWidth;
+  webcamCanvas.height = webcamVideo.videoHeight;
+  const ctx = webcamCanvas.getContext('2d');
+  ctx.drawImage(webcamVideo, 0, 0, webcamCanvas.width, webcamCanvas.height);
+
+  // Converte in blob → File
+  const blob = await new Promise(resolve => {
+    webcamCanvas.toBlob(resolve, 'image/jpeg', 0.95);
+  });
+
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const filename = `webcam_capture_${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.jpg`;
+  const capturedFile = new File([blob], filename, { type: 'image/jpeg' });
+
+  // Ferma stream e chiudi modale
+  webcamStream.getTracks().forEach(track => track.stop());
+  webcamStream = null;
+  webcamVideo.srcObject = null;
+  hide(webcamModal);
+
+  // Passa il file al flusso OCR
+  handleFile(capturedFile);
+});
+
+// ── Cambia camera (front/back) ───────────────────────────────────
+btnSwitchCamera.addEventListener('click', async () => {
+  if (!webcamStream) return;
+
+  try {
+    // Ferma stream corrente
+    webcamStream.getTracks().forEach(track => track.stop());
+
+    // Alterna facing mode
+    webcamFacingMode = webcamFacingMode === 'user' ? 'environment' : 'user';
+
+    // Riapri stream con la camera opposta
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: webcamFacingMode }
+    });
+
+    webcamStream = stream;
+    webcamVideo.srcObject = stream;
+    webcamVideo.play();
+
+  } catch (err) {
+    console.error('Switch camera error:', err);
+    alert('Impossibile cambiare camera.');
+  }
+});
+
+// ── Chiudi modale webcam ─────────────────────────────────────────
+function closeWebcamModal() {
+  if (webcamStream) {
+    webcamStream.getTracks().forEach(track => track.stop());
+    webcamStream = null;
+  }
+  webcamVideo.srcObject = null;
+  hide(webcamModal);
+}
+
+btnCloseWebcam.addEventListener('click', closeWebcamModal);
+webcamModal.querySelector('.modal-overlay').addEventListener('click', closeWebcamModal);
 
 function handleFile(file) {
   const allowed = ['.pdf', '.png', '.jpg', '.jpeg', '.webp'];
