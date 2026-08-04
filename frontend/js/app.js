@@ -936,6 +936,13 @@ function renderPageResultsList() {
 
 // ── Render Merged Markdown ──────────────────────────────────────
 async function renderMergedMarkdown() {
+  // Build merged markdown from pageResults (respects post-processing)
+  if (pageResults && pageResults.length > 0) {
+    renderMarkdown(buildMergedMarkdown());
+    return;
+  }
+  
+  // Fallback: fetch from server
   try {
     const res = await fetch(`/api/download/${currentJobId}`);
     if (res.ok) {
@@ -1016,13 +1023,22 @@ btnDownload.addEventListener('click', async () => {
   if (!currentJobId) return;
 
   try {
-    const res = await fetch(`/api/download/${currentJobId}`);
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
-      alert(`Download fallito: ${err.detail || 'Errore sconosciuto'}`);
-      return;
+    // Use processed markdown from pageResults if available
+    let content;
+    if (pageResults && pageResults.length > 0) {
+      content = buildMergedMarkdown();
+    } else {
+      // Fallback: fetch from server
+      const res = await fetch(`/api/download/${currentJobId}`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+        alert(`Download failed: ${err.detail || 'Unknown error'}`);
+        return;
+      }
+      content = await res.text();
     }
-    const blob = await res.blob();
+    
+    const blob = new Blob([content], { type: 'text/markdown' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -1085,7 +1101,17 @@ function fixHyphenation(text) {
   return text;
 }
 
-// Apply post-processing to current markdown result
+/** Build merged markdown from pageResults (respects post-processing) */
+function buildMergedMarkdown() {
+  if (!pageResults || pageResults.length === 0) return '';
+  let merged = '';
+  for (const pr of pageResults) {
+    merged += `\n\n## Page ${pr.page_num}\n\n${pr.markdown || ''}`;
+  }
+  return merged.trim();
+}
+
+/** Apply post-processing to current view and persist changes */
 function applyPostProcessing(processType) {
   if (!currentJobId || !zeroMdScript.textContent) {
     alert('No markdown result available for post-processing.');
@@ -1093,22 +1119,23 @@ function applyPostProcessing(processType) {
   }
   
   let processedText = zeroMdScript.textContent;
+  const fn = processType === 'compact' ? compactMarkdown : fixHyphenation;
+  processedText = fn(processedText);
   
-  switch (processType) {
-    case 'compact':
-      processedText = compactMarkdown(processedText);
-      break;
-    case 'hyphenation':
-      processedText = fixHyphenation(processedText);
-      break;
-    default:
-      return;
+  // Persist changes: update pageResults
+  if (isViewingAll) {
+    // Apply to all pages
+    for (const pr of pageResults) {
+      pr.markdown = fn(pr.markdown || '');
+    }
+  } else {
+    // Apply to current page only
+    const pr = pageResults.find(p => p.page_num === selectedPageNum);
+    if (pr) pr.markdown = processedText;
   }
   
-  // Update the markdown
+  // Update display
   zeroMdScript.textContent = processedText;
-  
-  // Force re-render of zero-md
   zeroMdResult.render().catch(err => {
     console.error('zero-md render error:', err);
   });
@@ -1152,44 +1179,43 @@ btnCompact.addEventListener('click', () => applyPostProcessing('compact'));
 btnHyphenation.addEventListener('click', () => applyPostProcessing('hyphenation'));
 
 btnCompactAll.addEventListener('click', () => {
-  // Apply compact to all pages and regenerate markdown
   if (!pageResults || pageResults.length === 0) {
     alert('No processed pages available for post-processing.');
     return;
   }
   
-  // Re-process all pages with compact fix
-  let fullMarkdown = '';
+  // Apply compact to all pages and persist
   for (const pr of pageResults) {
-    const pageText = pr.markdown || '';
-    const compacted = compactMarkdown(pageText);
-    fullMarkdown += `\n\n## Page ${pr.page_num}\n\n${compacted}`;
+    pr.markdown = compactMarkdown(pr.markdown || '');
   }
   
-  zeroMdScript.textContent = fullMarkdown.trim();
-  zeroMdResult.render().catch(err => {
-    console.error('zero-md render error:', err);
-  });
+  // Re-render current view
+  if (isViewingAll) {
+    renderMarkdown(buildMergedMarkdown());
+  } else {
+    const pr = pageResults.find(p => p.page_num === selectedPageNum);
+    renderMarkdown(pr ? pr.markdown : '');
+  }
 });
 
 btnHyphenationAll.addEventListener('click', () => {
-  // Apply hyphenation fix to all pages and regenerate markdown
   if (!pageResults || pageResults.length === 0) {
     alert('No processed pages available for post-processing.');
     return;
   }
   
-  let fullMarkdown = '';
+  // Apply hyphenation fix to all pages and persist
   for (const pr of pageResults) {
-    const pageText = pr.markdown || '';
-    const fixed = fixHyphenation(pageText);
-    fullMarkdown += `\n\n## Page ${pr.page_num}\n\n${fixed}`;
+    pr.markdown = fixHyphenation(pr.markdown || '');
   }
   
-  zeroMdScript.textContent = fullMarkdown.trim();
-  zeroMdResult.render().catch(err => {
-    console.error('zero-md render error:', err);
-  });
+  // Re-render current view
+  if (isViewingAll) {
+    renderMarkdown(buildMergedMarkdown());
+  } else {
+    const pr = pageResults.find(p => p.page_num === selectedPageNum);
+    renderMarkdown(pr ? pr.markdown : '');
+  }
 });
 
 // ── Init ─────────────────────────────────────────────────────────
