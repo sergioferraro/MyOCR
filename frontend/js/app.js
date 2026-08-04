@@ -84,9 +84,12 @@ let currentJobId = null;
 let eventSource  = null;
 
 // Preview state
-let previewThumbnails = [];
-let previewPage = 0;
-let previewTotal = 0;
+let previewThumbnails = [];    // data-URI thumbnails (initial batch)
+let previewPage = 0;          // 0-based current page
+let previewTotal = 0;         // total pages in the document
+let previewFileName = '';     // filename for lazy-loading
+let previewLoadedCount = 0;   // how many thumbnails we've loaded so far
+let previewLoadingPage = null; // page currently being lazy-loaded (debounce)
 
 // Webcam state
 let webcamStream = null;
@@ -509,6 +512,8 @@ async function loadPreview(file) {
   previewThumbnails = [];
   previewPage = 0;
   previewTotal = 0;
+  previewLoadedCount = 0;
+  previewFileName = file.name;
 
   const formData = new FormData();
   formData.append('file', file);
@@ -519,7 +524,8 @@ async function loadPreview(file) {
     const data = await res.json();
 
     previewThumbnails = data.thumbnails || [];
-    previewTotal = previewThumbnails.length;
+    previewTotal = data.total_pages || previewThumbnails.length;
+    previewLoadedCount = previewThumbnails.length;
     previewPage = 0;
 
     // Show/hide navigation
@@ -539,14 +545,109 @@ async function loadPreview(file) {
   }
 }
 
-function showPreviewPage() {
-  const src = previewThumbnails[previewPage];
-  previewContainer.innerHTML = `<img src="${src}" alt="Page ${previewPage + 1}">`;
-  if (previewTotal > 1) {
-    previewPageLabel.textContent = `${previewPage + 1} / ${previewTotal}`;
+// ── Lazy-load a single page thumbnail ──────────────────────────
+async function loadPageThumbnail(pageNum1based) {
+  // Fetch a single page thumbnail from the server on-demand.
+  if (!previewFileName) return null;
+  try {
+    const url = `/api/pdf-page?filename=${encodeURIComponent(previewFileName)}&page_num=${pageNum1based}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    return data.data_uri;
+  } catch (err) {
+    console.error(`Failed to load page ${pageNum1based}:`, err);
+    return null;
   }
-  btnPrevPage.disabled = previewPage === 0;
-  btnNextPage.disabled = previewPage === previewTotal - 1;
+}
+
+// ── Ensure thumbnail is loaded (lazy load if needed) ────────────
+async function ensureThumbnailLoaded(idx) {
+  if (idx < previewThumbnails.length && previewThumbnails[idx]) {
+    return previewThumbnails[idx];
+  }
+  // Need to lazy-load
+  const pageNum1based = idx + 1;
+  const src = await loadPageThumbnail(pageNum1based);
+  if (src) {
+    // Extend array if needed and store
+    while (previewThumbnails.length <= idx) {
+      previewThumbnails.push(null);
+    }
+    previewThumbnails[idx] = src;
+    previewLoadedCount = Math.max(previewLoadedCount, idx + 1);
+  }
+  return src;
+}
+
+function showPreviewPage(silent = false) {
+  // Show the preview for the current page index.
+  // If silent=true, don't update sidebar/markdown sync (used during internal updates).
+  const pageNum1based = previewPage + 1;
+  previewContainer.innerHTML = `
+    <div class="preview-loading" style="display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:0.85rem;">
+      <span class="loading-spinner"></span> Caricamento pagina ${pageNum1based}...
+    </div>`;
+
+  // Async load then render
+  (async () => {
+    const src = await ensureThumbnailLoaded(previewPage);
+    if (src) {
+      previewContainer.innerHTML = `<img src="${src}" alt="Page ${pageNum1based}" style="max-width:100%;max-height:100%;object-fit:contain;">`;
+    } else {
+      previewContainer.innerHTML = `
+        <div class="preview-placeholder">
+          <span class="placeholder-icon">⚠️</span>
+          <p>Impossibile caricare la pagina ${pageNum1based}</p>
+        </div>`;
+    }
+    if (previewTotal > 1) {
+      previewPageLabel.textContent = `${pageNum1based} / ${previewTotal}`;
+    }
+    btnPrevPage.disabled = previewPage === 0;
+    btnNextPage.disabled = previewPage === previewTotal - 1;
+
+    // Sync sidebar + markdown (only on user navigation)
+    if (!silent) {
+      syncFromPreview();
+    }
+  })();
+}
+
+// ── Sync: Preview → Sidebar + Markdown ─────────────────────────
+function syncFromPreview() {
+  const pageNum1based = previewPage + 1;
+  // Highlight matching page in sidebar
+  const items = pageResultsList.querySelectorAll('.page-result-item');
+  items.forEach((item, idx) => {
+    if (idx === 0) return; // skip "View All" button
+    const pageItemNum = parseInt(item.querySelector('.page-num')?.textContent || '0', 10);
+    if (pageItemNum === pageNum1based && !isViewingAll) {
+      item.classList.add('active');
+    } else {
+      item.classList.remove('active');
+    }
+  });
+  // Update markdown for this page
+  const pr = pageResults.find(p => p.page_num === pageNum1based);
+  if (pr && !isViewingAll) {
+    selectedPageNum = pageNum1based;
+    renderMarkdown(pr.markdown || '<!-- pagina non processata -->');
+  }
+}
+
+// ── Sync: Sidebar → Preview + Markdown ─────────────────────────
+function syncFromSidebar(pageNum1based) {
+  const idx = pageNum1based - 1;
+  if (idx >= 0 && idx < previewTotal) {
+    // Update state first
+    isViewingAll = false;
+    selectedPageNum = pageNum1based;
+    previewPage = idx;
+    
+    // Show preview page with silent=false so it updates the sidebar list
+    showPreviewPage(false);
+  }
 }
 
 btnPrevPage.addEventListener('click', () => {
@@ -555,6 +656,21 @@ btnPrevPage.addEventListener('click', () => {
 
 btnNextPage.addEventListener('click', () => {
   if (previewPage < previewTotal - 1) { previewPage++; showPreviewPage(); }
+});
+
+// ── Keyboard Navigation ─────────────────────────────────────────
+document.addEventListener('keydown', (e) => {
+  // Only navigate when a PDF is loaded and not typing in an input
+  if (previewTotal <= 1) return;
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+
+  if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (previewPage > 0) { previewPage--; showPreviewPage(); }
+  } else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+    e.preventDefault();
+    if (previewPage < previewTotal - 1) { previewPage++; showPreviewPage(); }
+  }
 });
 
 // ── Start OCR ────────────────────────────────────────────────────
@@ -734,28 +850,45 @@ async function fetchPageResults() {
 
 // ── Render Per-Page Results List ─────────────────────────────────
 function renderPageResultsList() {
-  pageResultsList.innerHTML = '';
+  // First, clear all existing page items but keep the "View All" button
+  const existingItems = pageResultsList.querySelectorAll('.page-result-item:not(.view-all-btn)');
+  existingItems.forEach(item => item.remove());
 
-  // "View All" button
-  const allBtn = document.createElement('div');
-  allBtn.className = 'page-result-item' + (isViewingAll ? ' active' : '');
-  allBtn.innerHTML = `
-    <span class="page-num">📄</span>
-    <span class="page-meta">Visualizza tutto (merge)</span>
-    <span class="page-status-dot done"></span>
-  `;
-  allBtn.addEventListener('click', async () => {
-    isViewingAll = true;
-    selectedPageNum = null;
-    renderPageResultsList(); // update active state
-    await renderMergedMarkdown();
-  });
-  pageResultsList.appendChild(allBtn);
+  // "View All" button - create if not exists
+  let allBtn = pageResultsList.querySelector('.view-all-btn');
+  if (!allBtn) {
+    allBtn = document.createElement('div');
+    allBtn.className = 'page-result-item' + (isViewingAll ? ' active' : '') + ' view-all-btn';
+    allBtn.innerHTML = `
+      <span class="page-num">📄</span>
+      <span class="page-meta">Visualizza tutto (merge)</span>
+      <span class="page-status-dot done"></span>
+    `;
+    allBtn.addEventListener('click', async () => {
+      isViewingAll = true;
+      selectedPageNum = null;
+      renderPageResultsList(); // update active state
+      await renderMergedMarkdown();
+    });
+    pageResultsList.appendChild(allBtn);
+  } else {
+    allBtn.className = 'page-result-item' + (isViewingAll ? ' active' : '') + ' view-all-btn';
+  }
 
-  // Individual page items
-  pageResults.forEach((pr) => {
-    const item = document.createElement('div');
-    item.className = 'page-result-item' + (selectedPageNum === pr.page_num ? ' active' : '');
+  // Individual page items - create or update
+  pageResults.forEach((pr, idx) => {
+    let item = pageResultsList.querySelector(`.page-result-item[data-page="${pr.page_num}"]`);
+    const isActive = !isViewingAll && selectedPageNum === pr.page_num;
+
+    if (!item) {
+      // Create new item
+      item = document.createElement('div');
+      item.className = 'page-result-item' + (isActive ? ' active' : '');
+      item.setAttribute('data-page', pr.page_num);
+    } else {
+      // Update existing item class
+      item.className = 'page-result-item' + (isActive ? ' active' : '');
+    }
 
     const methodLabel = pr.method === 'vlm' ? 'VLM' : pr.method === 'text_extract' ? 'TXT' : pr.method === 'skipped' ? '—' : '?';
     const modelLabel = pr.model && pr.model !== '(text-extract)' ? pr.model.substring(0, 30) : '';
@@ -767,12 +900,14 @@ function renderPageResultsList() {
       ${pr.status === 'done' ? `<button class="btn-reprocess" data-page="${pr.page_num}">🔄</button>` : ''}
     `;
 
-    // Click on the row → show that page's markdown
+    // Click on the row → sync preview + show that page's markdown
     item.addEventListener('click', async (e) => {
       if (e.target.classList.contains('btn-reprocess')) return; // let the button handle itself
       isViewingAll = false;
       selectedPageNum = pr.page_num;
-      renderPageResultsList(); // update active state
+      // Update sidebar list first, then sync preview
+      renderPageResultsList();
+      syncFromSidebar(pr.page_num);
       renderMarkdown(pr.markdown || '<!-- pagina non processata -->');
     });
 

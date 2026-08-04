@@ -499,6 +499,32 @@ header h1 {
   max-height: 100%;
   object-fit: contain;
   display: block;
+  transition: opacity 0.2s ease;
+}
+
+/* ── Loading Spinner ──────────────────────────────────────────── */
+.loading-spinner {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--text-muted);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  margin-right: 8px;
+  vertical-align: middle;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.preview-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 0.85rem;
 }
 
 /* ── Markdown Container (Result Pane) ──────────────────────────── */

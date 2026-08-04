@@ -537,6 +537,9 @@ async def list_models(url: str = DEFAULT_URL):
 PREVIEW_DPI = 100
 MAX_PREVIEW_PAGES = 20
 
+# In-memory cache per PDF preview (job_id -> (file_bytes, ext))
+preview_cache: dict[str, tuple[bytes, str]] = {}
+
 
 @app.post("/api/preview")
 async def preview_file(file: UploadFile = File(...)):
@@ -568,14 +571,64 @@ async def preview_file(file: UploadFile = File(...)):
             b64 = base64.b64encode(img_bytes).decode("utf-8")
             thumbnails.append(f"data:image/png;base64,{b64}")
 
+        # Cache PDF bytes for on-demand thumbnail generation
+        preview_cache[file.filename] = (contents, ext)
+
         return {
             "type": "pdf",
             "filename": file.filename,
             "pages": total,
             "thumbnails": thumbnails,
+            "total_pages": total,
+            "preview_pages": count,
         }
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Preview error: {exc}")
+
+
+# ── PDF Info (total pages) ──────────────────────────────────────
+
+@app.get("/api/pdf-info")
+async def pdf_info(filename: str):
+    """Return total page count for a cached PDF."""
+    if filename not in preview_cache:
+        raise HTTPException(status_code=404, detail="PDF not found in cache")
+    file_bytes, ext = preview_cache[filename]
+    try:
+        doc = fitz.open(stream=file_bytes, filetype="pdf")
+        total = len(doc)
+        return {"filename": filename, "total_pages": total}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"PDF error: {exc}")
+
+
+# ── Single Page Thumbnail (lazy load) ───────────────────────────
+
+@app.get("/api/pdf-page")
+async def pdf_page(filename: str, page_num: int, dpi: int = PREVIEW_DPI):
+    """
+    Return a single page thumbnail as a data-URI.
+    Used for lazy-loading pages beyond the initial preview batch.
+    page_num is 1-based.
+    """
+    if filename not in preview_cache:
+        raise HTTPException(status_code=404, detail="PDF not found in cache")
+    file_bytes, ext = preview_cache[filename]
+    try:
+        doc = fitz.open(stream=file_bytes, filetype="pdf")
+        total = len(doc)
+        if page_num < 1 or page_num > total:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Page {page_num} out of range (1-{total})",
+            )
+        page = doc[page_num - 1]
+        pix = page.get_pixmap(dpi=dpi)
+        img_bytes = pix.tobytes("png")
+        b64 = base64.b64encode(img_bytes).decode("utf-8")
+        return {"page_num": page_num, "data_uri": f"data:image/png;base64,{b64}"}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Page render error: {exc}")
 
 
 # ── OCR Job ───────────────────────────────────────────────────────────────
