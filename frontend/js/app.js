@@ -1104,11 +1104,8 @@ function fixHyphenation(text) {
 /** Build merged markdown from pageResults (respects post-processing) */
 function buildMergedMarkdown() {
   if (!pageResults || pageResults.length === 0) return '';
-  let merged = '';
-  for (const pr of pageResults) {
-    merged += `\n\n## Page ${pr.page_num}\n\n${pr.markdown || ''}`;
-  }
-  return merged.trim();
+  const parts = pageResults.map(pr => pr.markdown || '');
+  return parts.join('\n\n').trim();
 }
 
 /** Apply post-processing to current view and persist changes */
