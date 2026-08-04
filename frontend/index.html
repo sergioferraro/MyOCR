@@ -109,6 +109,15 @@
         <div id="pageResultsList" class="page-results-list"></div>
       </section>
 
+      <!-- Post-processing actions -->
+      <section class="panel hidden" id="postProcessingPanel">
+        <h2>🔧 Post-processing</h2>
+        <div class="post-process-actions">
+          <button id="btnCompactAll" class="btn-secondary btn-full">🪄 Compact All Text</button>
+          <button id="btnHyphenationAll" class="btn-secondary btn-full">✂️ Fix Hyphenation</button>
+        </div>
+      </section>
+
       <!-- Action buttons -->
       <div class="sidebar-actions hidden" id="sidebarActions">
         <button id="btnDownload" class="btn-secondary btn-full">⬇ Download Markdown</button>
@@ -140,6 +149,10 @@
       <section class="split-pane result-pane">
         <div class="pane-header">
           <h2>✅ Markdown Result</h2>
+          <div class="result-actions">
+            <button id="btnCompact" class="btn-small" title="Compact text (resolve line breaks)">🪄 Compact</button>
+            <button id="btnHyphenation" class="btn-small" title="Fix hyphenated words">✂️ Hyphenation</button>
+          </div>
           <span id="resultStatus" class="result-status hidden"></span>
         </div>
         <div class="markdown-container">

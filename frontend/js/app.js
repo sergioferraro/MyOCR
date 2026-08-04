@@ -33,6 +33,13 @@ const zeroMdResult      = $('#zeroMdResult');
 const zeroMdScript      = $('#zeroMdScript');
 const resultStatus      = $('#resultStatus');
 
+// Post-processing buttons
+const btnCompact        = $('#btnCompact');
+const btnHyphenation    = $('#btnHyphenation');
+const btnCompactAll     = $('#btnCompactAll');
+const btnHyphenationAll = $('#btnHyphenationAll');
+const postProcessingPanel = $('#postProcessingPanel');
+
 // Progress & Log (sidebar)
 const progressPanel     = $('#progressPanel');
 const progressBarFill   = $('.progress-fill');
@@ -822,7 +829,10 @@ async function onJobDone(data) {
   selectedPageNum = null;
   await renderMergedMarkdown();
 
-  // Show action buttons in sidebar
+  // Show post-processing options and action buttons in sidebar
+  if (pageResults && pageResults.length > 0) {
+    show(postProcessingPanel);
+  }
   show(sidebarActions);
 }
 
@@ -1029,6 +1039,53 @@ btnDownload.addEventListener('click', async () => {
   }
 });
 
+// ── Post-processing functions ──────────────────────────────────
+
+/** Compact text: resolve line breaks in paragraphs */
+function compactMarkdown(text) {
+  if (!text || typeof text !== 'string') return text;
+  
+  // Remove single line breaks within paragraphs (keep double line breaks for new paragraphs)
+  // This regex matches lines that don't end with punctuation or are not empty
+  return text.replace(/([^.\n])\n(?=[^.\n])/g, '$1 ');
+}
+
+/** Fix hyphenation: join words split across lines */
+function fixHyphenation(text) {
+  if (!text || typeof text !== 'string') return text;
+  
+  // Match hyphen at end of line followed by lowercase letter (common hyphenation pattern)
+  return text.replace(/(-)\n([a-z])/g, '$1$2');
+}
+
+// Apply post-processing to current markdown result
+function applyPostProcessing(processType) {
+  if (!currentJobId || !zeroMdScript.textContent) {
+    alert('No markdown result available for post-processing.');
+    return;
+  }
+  
+  let processedText = zeroMdScript.textContent;
+  
+  switch (processType) {
+    case 'compact':
+      processedText = compactMarkdown(processedText);
+      break;
+    case 'hyphenation':
+      processedText = fixHyphenation(processedText);
+      break;
+    default:
+      return;
+  }
+  
+  // Update the markdown
+  zeroMdScript.textContent = processedText;
+  
+  // Force re-render of zero-md
+  const event = new Event('change', { bubbles: true });
+  zeroMdScript.dispatchEvent(event);
+}
+
 // ── Reset for new OCR ────────────────────────────────────────────
 btnNewOcr.addEventListener('click', () => {
   selectedFile = null;
@@ -1043,6 +1100,7 @@ btnNewOcr.addEventListener('click', () => {
   hide(progressPanel);
   hide(logPanel);
   hide(pageResultsPanel);
+  hide(postProcessingPanel);
   hide(sidebarActions);
   clearLogs();
   clearMarkdown();
@@ -1059,6 +1117,47 @@ btnNewOcr.addEventListener('click', () => {
   hide(btnPrevPage);
   hide(btnNextPage);
   hide(previewPageLabel);
+});
+
+// ── Post-processing button event listeners ──────────────────────
+btnCompact.addEventListener('click', () => applyPostProcessing('compact'));
+btnHyphenation.addEventListener('click', () => applyPostProcessing('hyphenation'));
+
+btnCompactAll.addEventListener('click', () => {
+  // Apply compact to all pages and regenerate markdown
+  if (!pageResults || pageResults.length === 0) {
+    alert('No processed pages available for post-processing.');
+    return;
+  }
+  
+  // Re-process all pages with compact fix
+  let fullMarkdown = '';
+  for (const pr of pageResults) {
+    const pageText = pr.markdown || '';
+    const compacted = compactMarkdown(pageText);
+    fullMarkdown += `\n\n## Page ${pr.page_num}\n\n${compacted}`;
+  }
+  
+  zeroMdScript.textContent = fullMarkdown.trim();
+  zeroMdScript.dispatchEvent(new Event('change', { bubbles: true }));
+});
+
+btnHyphenationAll.addEventListener('click', () => {
+  // Apply hyphenation fix to all pages and regenerate markdown
+  if (!pageResults || pageResults.length === 0) {
+    alert('No processed pages available for post-processing.');
+    return;
+  }
+  
+  let fullMarkdown = '';
+  for (const pr of pageResults) {
+    const pageText = pr.markdown || '';
+    const fixed = fixHyphenation(pageText);
+    fullMarkdown += `\n\n## Page ${pr.page_num}\n\n${fixed}`;
+  }
+  
+  zeroMdScript.textContent = fullMarkdown.trim();
+  zeroMdScript.dispatchEvent(new Event('change', { bubbles: true }));
 });
 
 // ── Init ─────────────────────────────────────────────────────────

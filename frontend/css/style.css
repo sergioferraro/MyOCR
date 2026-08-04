@@ -109,6 +109,12 @@ header h1 {
   color: var(--text-secondary);
 }
 
+/* ── Result Actions (post-processing buttons in header) ─────── */
+.result-actions {
+  display: flex;
+  gap: 8px;
+}
+
 /* ── Panels (inside sidebar) ──────────────────────────────────── */
 .panel {
   background: var(--bg-card);
@@ -379,6 +385,13 @@ header h1 {
   flex-direction: column;
   gap: 8px;
   padding: 8px 0;
+}
+
+/* ── Post-processing Actions ─────────────────────────────────── */
+.post-process-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 /* ── Per-Page Results List ─────────────────────────────────────── */
