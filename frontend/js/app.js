@@ -1,6 +1,6 @@
 /* ── Local OCR — Frontend Controller (Sidebar + Split View) ──────
- * Sidebar: Impostazioni, File, Progresso, Log
- * Main area: sorgente (sinistra) ↔ risultato markdown (destra)
+ * Sidebar: Setting, File, Progress, Log
+ * Main area: source (left) ↔ result markdown (right)
  * ──────────────────────────────────────────────────────────────── */
 
 // ── DOM refs ─────────────────────────────────────────────────────
@@ -683,20 +683,20 @@ btnStart.addEventListener('click', async () => {
   const forceVlm = forceVlmCheckbox.checked;
   const pageSpec = getPageSpec();
 
-  if (!model) { alert('Seleziona un modello.'); return; }
-  if (!url)   { alert('Inserisci l\'URL del server.'); return; }
-  if (pageSpec !== 'all' && !pageSpec) { alert('Inserisci le pagine da processare.'); return; }
+  if (!model) { alert('Select a model.'); return; }
+  if (!url)   { alert('Select URL.'); return; }
+  if (pageSpec !== 'all' && !pageSpec) { alert('Enter the pages to be processed.'); return; }
 
   // Reset UI
   btnStart.disabled = true;
-  btnStart.textContent = '⏳ Elaborazione...';
+  btnStart.textContent = '⏳ Processing...';
   clearLogs();
   clearMarkdown();
   show(progressPanel);
   show(logPanel);
   hide(sidebarActions);
   setProgress(0, 'Invio file...');
-  setResultStatus('In elaborazione...', 'processing');
+  setResultStatus('Processing...', 'processing');
 
   const formData = new FormData();
   formData.append('file', selectedFile);
@@ -712,13 +712,13 @@ btnStart.addEventListener('click', async () => {
     const data = await res.json();
     currentJobId = data.job_id;
     addLog(`Job avviato: ${currentJobId}`, 'info');
-    setProgress(5, 'Connessione al server VLM...');
+    setProgress(5, 'Connecting to VLM server...');
 
     connectSSE(currentJobId);
   } catch (err) {
     addLog(`Errore: ${err.message}`, 'error');
     btnStart.disabled = false;
-    btnStart.textContent = '🚀 Avvia OCR';
+    btnStart.textContent = '🚀 Start OCR';
     hide(progressPanel);
     clearResultStatus();
   }
@@ -737,7 +737,7 @@ function connectSSE(jobId) {
       const pct = data.total_pages > 0
         ? Math.round((data.processed_pages / data.total_pages) * 100)
         : 0;
-      setProgress(pct, `${data.processed_pages}/${data.total_pages} pagine elaborate`);
+      setProgress(pct, `${data.processed_pages}/${data.total_pages} pages processed`);
 
       const newLogs = data.logs || [];
       if (typeof window._ocrLogsShown === 'undefined') {
@@ -784,7 +784,7 @@ async function pollStatus(jobId) {
       const pct = data.total_pages > 0
         ? Math.round((data.processed_pages / data.total_pages) * 100)
         : 0;
-      setProgress(pct, `${data.processed_pages}/${data.total_pages} pagine`);
+      setProgress(pct, `${data.processed_pages}/${data.total_pages} pages`);
 
       const lastMsg = (data.logs || []).pop();
       if (lastMsg) addLog(lastMsg);
@@ -805,10 +805,10 @@ async function pollStatus(jobId) {
 // ── Job Complete ─────────────────────────────────────────────────
 async function onJobDone(data) {
   btnStart.disabled = false;
-  btnStart.textContent = '🚀 Avvia OCR';
-  setProgress(100, 'Completato!');
+  btnStart.textContent = '🚀 Start OCR';
+  setProgress(100, 'Completed!');
 
-  setResultStatus(`✅ ${data.processed_pages} pagine elaborate`, 'success');
+  setResultStatus(`✅ ${data.processed_pages} pages processed`, 'success');
 
   // Fetch per-page results
   await fetchPageResults();
@@ -831,7 +831,7 @@ function onJobError(data) {
   btnStart.textContent = '🚀 Avvia OCR';
   setProgress(0, 'Errore');
 
-  setResultStatus(`❌ ${data.message || 'Errore sconosciuto'}`, 'error');
+  setResultStatus(`❌ ${data.message || 'Unknown error'}`, 'error');
 }
 
 // ── Fetch Per-Page Results ───────────────────────────────────────
@@ -861,7 +861,7 @@ function renderPageResultsList() {
     allBtn.className = 'page-result-item' + (isViewingAll ? ' active' : '') + ' view-all-btn';
     allBtn.innerHTML = `
       <span class="page-num">📄</span>
-      <span class="page-meta">Visualizza tutto (merge)</span>
+      <span class="page-meta">View all (merge)</span>
       <span class="page-status-dot done"></span>
     `;
     allBtn.addEventListener('click', async () => {
@@ -908,7 +908,7 @@ function renderPageResultsList() {
       // Update sidebar list first, then sync preview
       renderPageResultsList();
       syncFromSidebar(pr.page_num);
-      renderMarkdown(pr.markdown || '<!-- pagina non processata -->');
+      renderMarkdown(pr.markdown || '<!-- page not processed -->');
     });
 
     // Reprocess button
@@ -962,7 +962,7 @@ btnConfirmReprocess.addEventListener('click', async () => {
   if (!model) { alert('Seleziona un modello.'); return; }
 
   btnConfirmReprocess.disabled = true;
-  btnConfirmReprocess.textContent = '⏳ Riprocessando...';
+  btnConfirmReprocess.textContent = '⏳ Reprocessing...';
 
   try {
     const formData = new FormData();
@@ -991,10 +991,10 @@ btnConfirmReprocess.addEventListener('click', async () => {
 
     hide(reprocessModal);
   } catch (err) {
-    alert(`Errore riprocessamento: ${err.message}`);
+    alert(`Reprocessing error: ${err.message}`);
   } finally {
     btnConfirmReprocess.disabled = false;
-    btnConfirmReprocess.textContent = '🔄 Riprocessa';
+    btnConfirmReprocess.textContent = '🔄 Reprocess';
   }
 });
 
@@ -1025,7 +1025,7 @@ btnDownload.addEventListener('click', async () => {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   } catch (err) {
-    alert(`Errore download: ${err.message}`);
+    alert(`Download error: ${err.message}`);
   }
 });
 
@@ -1054,7 +1054,7 @@ btnNewOcr.addEventListener('click', () => {
   previewContainer.innerHTML = `
     <div class="preview-placeholder">
       <span class="placeholder-icon">📄</span>
-      <p>Nessun file caricato</p>
+      <p>No file uploaded</p>
     </div>`;
   hide(btnPrevPage);
   hide(btnNextPage);

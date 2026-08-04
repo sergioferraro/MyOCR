@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="it">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -18,17 +18,17 @@
     <aside class="sidebar">
       <!-- Settings Panel -->
       <section class="panel">
-        <h2>⚙️ Impostazioni</h2>
+        <h2>⚙️ Settings</h2>
         <div class="settings-grid">
           <div class="field">
             <label for="serverUrl">Server URL</label>
             <input type="text" id="serverUrl" placeholder="http://localhost:1234" value="http://localhost:1234">
           </div>
           <div class="field">
-            <label for="modelSelect">Modello</label>
+            <label for="modelSelect">Model</label>
             <div class="model-row">
               <select id="modelSelect">
-                <option value="">— Carica modelli —</option>
+                <option value="">— Load models —</option>
               </select>
               <button id="btnRefreshModels" class="btn-small">⟳</button>
             </div>
@@ -49,15 +49,15 @@
             </label>
           </div>
           <div class="field page-selection-field">
-            <label>Pagine da processare</label>
+            <label>Pages to process</label>
             <div class="page-selection">
               <label class="radio-label">
                 <input type="radio" name="pageMode" value="all" checked>
-                <span>Tutte</span>
+                <span>All</span>
               </label>
               <label class="radio-label">
                 <input type="radio" name="pageMode" value="custom">
-                <span>Intervallo</span>
+                <span>Range</span>
               </label>
               <input type="text" id="pageRangeInput" placeholder="es. 1-5,8" class="hidden">
             </div>
@@ -70,13 +70,13 @@
         <h2>📄 File</h2>
         <div class="file-options">
           <button id="btnWebcam" class="btn-secondary">
-            📷 Scatta Foto (Webcam)
+            📷 Take Photo (Webcam)
           </button>
         </div>
         <div id="dropZone" class="drop-zone">
           <div class="drop-zone-inner">
             <span class="drop-icon">📁</span>
-            <p>Trascina qui il file oppure <button id="btnBrowse" class="btn-text">sfoglia</button></p>
+            <p>Drag & drop a file here or <button id="btnBrowse" class="btn-text">browse</button></p>
             <p class="hint">PDF, PNG, JPG, JPEG, WebP</p>
           </div>
           <input type="file" id="fileInput" accept=".pdf,.png,.jpg,.jpeg,.webp,image/*" hidden>
@@ -85,16 +85,16 @@
           <span id="fileName"></span>
           <span id="fileSize"></span>
         </div>
-        <button id="btnStart" class="btn-primary hidden">🚀 Avvia OCR</button>
+        <button id="btnStart" class="btn-primary hidden">🚀 Start OCR</button>
       </section>
 
       <!-- Progress -->
       <section class="panel hidden" id="progressPanel">
-        <h2>📊 Progresso</h2>
+        <h2>📊 Progress</h2>
         <div class="progress-bar-container">
           <div id="progressBar" class="progress-bar"><div class="progress-fill"></div></div>
         </div>
-        <p id="progressText">In attesa...</p>
+        <p id="progressText">Pending...</p>
       </section>
 
       <!-- Log -->
@@ -105,14 +105,14 @@
 
       <!-- Per-Page Results -->
       <section class="panel hidden" id="pageResultsPanel">
-        <h2>📑 Pagine Processate</h2>
+        <h2>📑 Processed Pages</h2>
         <div id="pageResultsList" class="page-results-list"></div>
       </section>
 
       <!-- Action buttons -->
       <div class="sidebar-actions hidden" id="sidebarActions">
-        <button id="btnDownload" class="btn-secondary btn-full">⬇ Scarica Markdown</button>
-        <button id="btnNewOcr" class="btn-secondary btn-full">🔄 Nuovo OCR</button>
+        <button id="btnDownload" class="btn-secondary btn-full">⬇ Download Markdown</button>
+        <button id="btnNewOcr" class="btn-secondary btn-full">🔄 New OCR</button>
       </div>
     </aside>
 
@@ -121,7 +121,7 @@
       <!-- Left: Source Preview -->
       <section class="split-pane source-pane">
         <div class="pane-header">
-          <h2>📄 Sorgente</h2>
+          <h2>📄 Source</h2>
           <div class="preview-nav">
             <button id="btnPrevPage" class="btn-small hidden">◀</button>
             <span id="previewPageLabel" class="hidden"></span>
@@ -131,7 +131,7 @@
         <div id="previewContainer" class="preview-container">
           <div class="preview-placeholder">
             <span class="placeholder-icon">📄</span>
-            <p>Nessun file caricato</p>
+            <p>No file loaded</p>
           </div>
         </div>
       </section>
@@ -139,7 +139,7 @@
       <!-- Right: Markdown Result -->
       <section class="split-pane result-pane">
         <div class="pane-header">
-          <h2>✅ Risultato Markdown</h2>
+          <h2>✅ Markdown Result</h2>
           <span id="resultStatus" class="result-status hidden"></span>
         </div>
         <div class="markdown-container">
@@ -158,15 +158,15 @@
     <div class="modal-overlay"></div>
     <div class="modal-content webcam-modal-content">
       <div class="modal-header">
-        <h3>📷 Anteprima Webcam</h3>
+        <h3>📷 Webcam Preview</h3>
         <button id="btnCloseWebcam" class="btn-close">&times;</button>
       </div>
       <div class="webcam-preview-body">
         <video id="webcamVideo" autoplay playsinline></video>
         <canvas id="webcamCanvas" class="hidden"></canvas>
         <div class="webcam-controls">
-          <button id="btnCapturePhoto" class="btn-primary">📸 Scatta Foto</button>
-          <button id="btnSwitchCamera" class="btn-secondary">🔄 Cambia Camera</button>
+          <button id="btnCapturePhoto" class="btn-primary">📸 Capture</button>
+          <button id="btnSwitchCamera" class="btn-secondary">🔄 Switch Camera</button>
         </div>
       </div>
     </div>
@@ -177,15 +177,15 @@
     <div class="modal-overlay"></div>
     <div class="modal-content dialog-modal-content">
       <div class="modal-header">
-        <h3>📄 Pagine Acquisite</h3>
+        <h3>📄 Captured Pages</h3>
         <button id="btnCloseAddPages" class="btn-close">&times;</button>
       </div>
       <div class="dialog-body">
-        <p>Acquisita <strong>1 nuova pagina</strong>. Totale: <span id="webcamPageCount">1</span> pagine.</p>
+        <p><strong>1 new page</strong> captured. Total: <span id="webcamPageCount">1</span> pages.</p>
         <div id="webcamThumbnails" class="webcam-thumbnails"></div>
         <div class="dialog-actions">
-          <button id="btnAddMorePages" class="btn-secondary">➕ Aggiungi altra pagina</button>
-          <button id="btnDoneCapturing" class="btn-primary">✅ Ho finito</button>
+          <button id="btnAddMorePages" class="btn-secondary">➕ Add another page</button>
+          <button id="btnDoneCapturing" class="btn-primary">✅ Done</button>
         </div>
       </div>
     </div>
@@ -196,17 +196,17 @@
     <div class="modal-overlay"></div>
     <div class="modal-content dialog-modal-content">
       <div class="modal-header">
-        <h3>✏️ Nome file di output</h3>
+        <h3>✏️ Output filename</h3>
         <button id="btnCloseRename" class="btn-close">&times;</button>
       </div>
       <div class="dialog-body">
-        <p>Inserisci un nome per il file Markdown risultante:</p>
+        <p>Enter a name for the resulting Markdown file:</p>
         <div class="rename-field">
           <input type="text" id="renameInput" placeholder="es. documento_ocr">
           <span class="rename-ext">.md</span>
         </div>
         <div class="dialog-actions">
-          <button id="btnConfirmRename" class="btn-primary">🚀 Avvia OCR</button>
+          <button id="btnConfirmRename" class="btn-primary">🚀 Start OCR</button>
         </div>
       </div>
     </div>
@@ -217,18 +217,18 @@
     <div class="modal-overlay"></div>
     <div class="modal-content dialog-modal-content">
       <div class="modal-header">
-        <h3>🔄 Riprocessa Pagina <span id="reprocessPageNum"></span></h3>
+        <h3>🔄 Reprocess Page <span id="reprocessPageNum"></span></h3>
         <button id="btnCloseReprocess" class="btn-close">&times;</button>
       </div>
       <div class="dialog-body">
-        <p>Seleziona un modello VLM per riprocessare questa pagina:</p>
+        <p>Select a VLM model to reprocess this page:</p>
         <div class="reprocess-field">
           <select id="reprocessModelSelect">
-            <option value="">— Seleziona modello —</option>
+            <option value="">— Select model —</option>
           </select>
         </div>
         <div class="dialog-actions">
-          <button id="btnConfirmReprocess" class="btn-primary">🔄 Riprocessa</button>
+          <button id="btnConfirmReprocess" class="btn-primary">🔄 Reprocess</button>
         </div>
       </div>
     </div>
