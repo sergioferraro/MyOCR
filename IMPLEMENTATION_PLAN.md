@@ -1,525 +1,378 @@
-# Implementation Plan — Local LLM-powered OCR
+# Implementation Plan — Local OCR Web Application
 
-> Based on the specification in `Local_OCR.md`.  
-> This plan breaks the project into phases, modules, and individual tasks with clear acceptance criteria.
+> Current architecture: FastAPI backend + vanilla JS frontend.  
+> This document describes the **existing** architecture, not a future plan.
 
 ---
 
 ## Table of Contents
 
-1. [Project Overview](#1-project-overview)
-2. [Module Architecture](#2-module-architecture)
-3. [Phase 1 — Project Scaffolding](#3-phase-1--project-scaffolding)
-4. [Phase 2 — Core Worker Engine (Thread-Safe Queue)](#4-phase-2--core-worker-engine-thread-safe-queue)
-5. [Phase 3 — File Processing (PDF + Image)](#5-phase-3--file-processing-pdf--image)
-6. [Phase 4 — LM Studio Integration (Vision API)](#6-phase-4--lm-studio-integration-vision-api)
-7. [Phase 5 — GUI Layout & Widgets](#7-phase-5--gui-layout--widgets)
-8. [Phase 6 — Event Wiring & Integration](#8-phase-6--event-wiring--integration)
-9. [Phase 7 — Testing & Polish](#9-phase-7--testing--polish)
-10. [Risk Register & Mitigations](#10-risk-register--mitigations)
-11. [File Map](#11-file-map)
+1. [Architecture Overview](#1-architecture-overview)
+2. [Backend — FastAPI Server](#2-backend--fastapi-server)
+3. [Frontend — Single-Page Web App](#3-frontend--single-page-web-app)
+4. [API Endpoints Reference](#4-api-endpoints-reference)
+5. [Data Flow](#5-data-flow)
+6. [Concurrency Model](#6-concurrency-model)
+7. [File Map](#7-file-map)
+8. [Migration Notes (v1.x → v2.x)](#8-migration-notes-v1x--v2x)
 
 ---
 
-## 1. Project Overview
+## 1. Architecture Overview
 
 | Aspect | Detail |
 |---|---|
-| **Goal** | Desktop app that OCRs PDFs/images → structured Markdown via a local VLM (LM Studio) |
-| **GUI Framework** | `customtkinter` (dark theme) |
-| **PDF Engine** | `pymupdf` (`fitz`) |
-| **AI Client** | `openai` Python SDK (OpenAI-compatible endpoint) |
-| **Concurrency** | `threading` + `queue.Queue`; single worker at a time; main thread polls via `.after()` |
-| **Output** | `_extracted.md` placed alongside the source file |
+| **Goal** | Web app that OCRs PDFs/images → structured Markdown via a local VLM (LM Studio) |
+| **Backend** | `FastAPI` (ASGI) served by `uvicorn` |
+| **Frontend** | Vanilla HTML/CSS/JS — single-page app with split-pane layout |
+| **PDF Engine** | `pymupdf` (`fitz`) — page rendering, text extraction, thumbnail generation |
+| **AI Client** | `openai` Python SDK (OpenAI-compatible endpoint, LM Studio) |
+| **Streaming** | Server-Sent Events (SSE) for real-time progress updates |
+| **Concurrency** | `BackgroundTasks` (FastAPI) + `threading` for job state management |
+| **Output** | Markdown files saved in `outputs/` directory |
+| **Markdown Rendering** | `zero-md` web component (KaTeX math, Mermaid diagrams, syntax highlighting) |
 
 ---
 
-## 2. Module Architecture
+## 2. Backend — FastAPI Server
+
+### 2.1 Core Modules (`main.py`)
 
 ```
-myocr/
-├── Local_OCR.md                  # Original spec
-├── IMPLEMENTATION_PLAN.md        # This file
-├── main.py                       # Application entry point (single-file app)
-├── requirements.txt              # Python dependencies
-└── README.md                     # User-facing docs (future)
-```
-
-> **Design decision:** The entire application lives in a single `main.py` file. The spec calls for a "complete, ready-to-run" application, and keeping it monolithic avoids import complexity for end-users. The file is internally structured into clear sections:
-
-```
-main.py
-├── Imports & Constants
-│   ├── System imports (tkinter, threading, queue, tempfile, os, base64, io, etc.)
-│   ├── customtkinter
-│   ├── pymupdf (fitz)
-│   └── openai
-├── Constants
+main.py (~550 lines)
+├── Constants & Configuration
 │   ├── DEFAULT_URL = "http://localhost:1234"
-│   ├── DPI_OPTIONS = ["100", "150", "200", "300"]
+│   ├── DPI_OPTIONS = [100, 150, 200, 300]
 │   ├── IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+│   ├── PDF_EXTENSIONS = {".pdf"}
 │   └── SYSTEM_PROMPT = "Convert this image into Markdown text format..."
-├── Event Queue (thread-safe)
-│   ├── Event dataclass (type, message, data)
-│   └── Global Queue instance
-├── Worker Functions (run in background thread)
-│   ├── _refresh_models_worker()
-│   ├── _process_image_worker()
-│   ├── _process_pdf_worker()
-│   └── _send_page_to_vlm(page_bytes) → str
-├── GUI Class (CTk)
-│   ├── __init__(): configure theme, create queue poller
-│   ├── _build_ui(): layout all widgets
-│   ├── _poll_queue(): .after() callback for queue processing
-│   ├── _handle_event(): dispatch by event type
-│   ├── _select_file(): file dialog
-│   ├── _refresh_models(): kick off model fetch
-│   ├── _start_ocr(): main processing entry
-│   └── _log(msg): append to log textbox + autoscroll
-├── Main Block
-│   └── app = App(); app.mainloop()
+│
+├── Per-Page Result Tracking
+│   ├── PageResult dataclass (page_num, markdown, model, method, status, error_msg)
+│   └── JobState dataclass (job_id, status, page_results dict, file_bytes, logs)
+│
+├── In-Memory Job Store
+│   ├── jobs: dict[str, JobState]  (thread-safe via threading.Lock)
+│   └── Helper functions: _add_log, _progress, _set_status, _ensure_page_result, _update_page_result
+│
+├── OCR Core Engine
+│   ├── _get_client(url) → OpenAI client
+│   ├── _send_page_to_vlm(image_bytes, model, url) → str
+│   ├── _is_text_page(page) → bool  (hybrid detection: ≥20 chars = searchable)
+│   ├── _process_single_page()      (per-page processing with status tracking)
+│   ├── _merge_page_results()       (assemble final markdown from per-page results)
+│   └── _write_merged_output()      (write to outputs/)
+│
+├── Job Workers
+│   ├── run_ocr_job()               (top-level dispatcher)
+│   ├── process_image()             (single image → VLM)
+│   └── process_pdf()               (multi-page PDF with hybrid text/VLM)
+│
+├── FastAPI Application
+│   ├── app = FastAPI(title="Local OCR Server", version="2.1.0")
+│   ├── CORS middleware (allow_all)
+│   └── Static file serving (/static → frontend/)
+│
+└── API Endpoints (see Section 4)
 ```
+
+### 2.2 Key Design Decisions
+
+**Per-Page Result Tracking:**
+Each PDF page is tracked individually via `PageResult` objects stored in `JobState.page_results`. This enables:
+- Reprocessing individual pages with different models
+- Mixed methods (text-extract + VLM) within the same document
+- On-the-fly merge at download time (always reflects latest state)
+
+**File Bytes Caching:**
+The original PDF bytes are stored in `JobState.file_bytes` after the first upload, enabling reprocessing without re-uploading.
+
+**Hybrid Processing:**
+`_is_text_page()` checks if a PDF page has ≥20 characters of selectable text:
+- **Yes** → native text extraction via `page.get_text("text")` (fast, accurate)
+- **No** → render to image at configured DPI, send to VLM
+- **Force VLM** checkbox bypasses this check entirely
+
+**Lazy-Load Thumbnails:**
+PDF previews are cached in `preview_cache` (filename → file_bytes). Initial preview returns first 20 pages; additional pages are loaded on-demand via `/api/pdf-page`.
 
 ---
 
-## 3. Phase 1 — Project Scaffolding
+## 3. Frontend — Single-Page Web App
 
-### Task 1.1 — Create `requirements.txt`
+### 3.1 File Structure
+
 ```
-customtkinter>=5.2.0
-pymupdf>=1.23.0
-openai>=1.0.0
+frontend/
+├── index.html          # Layout, modals, zero-md integration
+├── css/style.css       # Responsive dark theme, CSS custom properties
+└── js/app.js           # UI controller, API calls, state management
 ```
 
-### Task 1.2 — Create skeleton `main.py`
-- Import block
-- `if __name__ == "__main__":` guard
-- Verify all imports resolve (dry run)
+### 3.2 Layout
 
-**Acceptance criteria:**
-- [ ] `pip install -r requirements.txt` succeeds
-- [ ] `python main.py` runs without import errors (even if GUI is empty)
+```
+┌──────────────────────────────────────────────────────────────┐
+│  🔍 Local OCR — Vision Language Model — LM Studio            │
+├──────────┬───────────────────────────────────────────────────┤
+│ SIDEBAR  │  MAIN AREA (Split View)                           │
+│          │                                                   │
+│ ⚙️ Settings│  ┌─────────────┐  ┌─────────────────────────┐  │
+│           │  │  📄 Sorgente │  │ ✅ Risultato Markdown   │  │
+│ 📄 File   │  │  (preview)   │  │  (zero-md rendered)     │  │
+│           │  │  ◀ nav ▶    │  │                         │  │
+│ 📊 Progress│  └─────────────┘  └─────────────────────────┘  │
+│           │                                                   │
+│ 📋 Log    │  Keyboard nav: ← → ↑ ↓                           │
+│           │                                                   │
+│ 📑 Pages  │  Per-page sync: preview ↔ sidebar ↔ markdown     │
+│           │                                                   │
+│ ⬇ Download│                                                   │
+│ 🔄 New OCR│                                                   │
+├──────────┴───────────────────────────────────────────────────┤
+│  Local OCR v2.0 · FastAPI + VLM                              │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### 3.3 State Management (Client-Side)
+
+Key state variables in `app.js`:
+
+| Variable | Purpose |
+|---|---|
+| `selectedFile` | Currently selected file (File object) |
+| `currentJobId` | Active OCR job ID |
+| `eventSource` | SSE connection for streaming updates |
+| `previewThumbnails[]` | Loaded thumbnail data-URIs |
+| `previewPage` | Current preview page index (0-based) |
+| `pageResults[]` | Per-page processing results |
+| `isViewingAll` | `true` = merged view, `false` = single page |
+| `webcamCapturedPages[]` | Captured webcam images (blob + dataUrl) |
+
+### 3.4 Modals
+
+| Modal | Purpose |
+|---|---|
+| `webcamModal` | Live webcam preview, capture, camera switch |
+| `addPagesModal` | Thumbnail grid of captured pages, "add more" |
+| `renameModal` | Custom output filename before OCR start |
+| `reprocessModal` | Select model for single-page reprocessing |
+
+### 3.5 Webcam → PDF Pipeline
+
+1. User captures photo(s) via webcam
+2. Multiple captures stored in `webcamCapturedPages[]`
+3. On "Ho finito", `jsPDF` assembles all images into a PDF blob
+4. The generated PDF is treated as a normal file upload
+5. Fallback: if only 1 image, sent as `.jpg` directly
 
 ---
 
-## 4. Phase 2 — Core Worker Engine (Thread-Safe Queue)
+## 4. API Endpoints Reference
 
-### Task 2.1 — Define Event Dataclass
-
-```python
-from dataclasses import dataclass
-
-@dataclass
-class Event:
-    event_type: str   # "log", "progress", "success", "error", "models_ready"
-    message: str      # human-readable text
-    data: any = None  # extra payload (e.g., model list)
-```
-
-### Task 2.2 — Create Global Queue
-
-```python
-import queue
-event_queue = queue.Queue()
-```
-
-### Task 2.3 — Implement Queue Poller in GUI Class
-
-- `self.after(100, self._poll_queue)` called from `__init__`
-- `_poll_queue()` drains all available events via `queue.get_nowait()` in a loop
-- Each event is dispatched to `_handle_event(event)`
-- After processing, schedule next poll with `.after(100, ...)`
-
-### Task 2.4 — Implement Event Dispatcher
-
-```python
-def _handle_event(self, event):
-    if event.event_type == "log":
-        self._log(event.message)
-    elif event.event_type == "success":
-        self._log(event.message)
-        self._finish_processing(success=True)
-        messagebox.showinfo("Success", event.message)
-    elif event.event_type == "error":
-        self._log(event.message)
-        self._finish_processing(success=False)
-        messagebox.showerror("Error", event.message)
-    elif event.event_type == "models_ready":
-        self._populate_model_dropdown(event.data)
-    # ... etc
-```
-
-### Task 2.5 — Implement `_finish_processing()`
-
-- Re-enable "Start OCR" button
-- Stop progress bar animation
-- Reset button text
-
-**Acceptance criteria:**
-- [ ] Workers never touch Tk widgets directly
-- [ ] All GUI updates flow through the queue
-- [ ] Only one background thread runs at a time (enforced by button disable)
-
----
-
-## 5. Phase 3 — File Processing (PDF + Image)
-
-### Task 3.1 — File Selection Handler
-
-- `filedialog.askopenfilename()` with filters for PDF + image types
-- Store selected path in `self._selected_file`
-- Update filename label
-
-### Task 3.2 — Image Processing Worker
-
-```python
-def _process_image_worker(filepath):
-    try:
-        event_queue.put(Event("log", "[Start] Processing image..."))
-        with open(filepath, "rb") as f:
-            image_bytes = f.read()
-        result = _send_page_to_vlm(image_bytes)
-        output_path = filepath.rsplit(".", 1)[0] + "_extracted.md"
-        with open(output_path, "w") as f:
-            f.write(result)
-        event_queue.put(Event("success", f"[Success] File saved to {output_path}"))
-    except Exception as e:
-        event_queue.put(Event("error", f"[Error] {str(e)}"))
-```
-
-### Task 3.3 — PDF Processing Worker
-
-```python
-def _process_pdf_worker(filepath, dpi):
-    tmpdir = None
-    try:
-        tmpdir = tempfile.mkdtemp()
-        doc = fitz.open(filepath)
-        pages = len(doc)
-        event_queue.put(Event("log", f"[Start] Processing PDF ({pages} pages)..."))
-
-        all_text = []
-        for i in range(pages):
-            event_queue.put(Event("log", f"[{i+1}/{pages}] Converting page {i+1} to image..."))
-            page = doc[i]
-            pix = page.get_pixmap(dpi=int(dpi))
-            page_path = os.path.join(tmpdir, f"page_{i+1}.png")
-            pix.save(page_path)
-
-            event_queue.put(Event("log", f"[{i+1}/{pages}] Sending page {i+1} to LM Studio..."))
-            with open(page_path, "rb") as f:
-                page_bytes = f.read()
-            result = _send_page_to_vlm(page_bytes)
-            all_text.append(result)
-
-        # Join pages with double newlines
-        full_text = "\n\n".join(all_text)
-        output_path = filepath.rsplit(".", 1)[0] + "_extracted.md"
-        with open(output_path, "w") as f:
-            f.write(full_text)
-
-        event_queue.put(Event("success", f"[Success] File saved to {output_path}"))
-    except Exception as e:
-        event_queue.put(Event("error", f"[Error] {str(e)}"))
-    finally:
-        if tmpdir and os.path.exists(tmpdir):
-            import shutil
-            shutil.rmtree(tmpdir)
-```
-
-**Acceptance criteria:**
-- [ ] Image files are sent directly to VLM without intermediate disk writes
-- [ ] PDF pages are rendered at user-selected DPI
-- [ ] Temp directory is always cleaned up (even on error) via `finally`
-- [ ] Output `.md` file is placed alongside source with `_extracted.md` suffix
-- [ ] Multi-page PDFs produce combined Markdown with page separation
-
----
-
-## 6. Phase 4 — LM Studio Integration (Vision API)
-
-### Task 6.1 — VLM Client Helper
-
-```python
-def _get_client(url):
-    return openai.OpenAI(base_url=f"{url}/v1", api_key="not-needed")
-```
-
-### Task 6.2 — Send Page to VLM
-
-```python
-SYSTEM_PROMPT = """Convert this image into Markdown text format. Your task is to perform high-accuracy Optical Character Recognition (OCR). Preserve the document's structure as accurately as possible: headers, lists, and tables. Do not add any greetings, explanations, or introductory/concluding remarks. Output only the raw recognized text."""
-
-def _send_page_to_vlm(image_bytes, model, url):
-    client = _get_client(url)
-    b64 = base64.b64encode(image_bytes).decode("utf-8")
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": [
-                {"type": "text", "text": "Extract the text from this image."},
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}
-            ]}
-        ],
-        max_tokens=8192,
-    )
-    return response.choices[0].message.content
-```
-
-### Task 6.3 — Model Refresh Worker
-
-```python
-def _refresh_models_worker(url):
-    try:
-        client = openai.OpenAI(base_url=f"{url}/v1", api_key="not-needed")
-        models = client.models.list()
-        model_ids = [m.id for m in models]
-        event_queue.put(Event("models_ready", "Models fetched", model_ids))
-    except Exception as e:
-        event_queue.put(Event("error", f"[Error] Could not fetch models: {str(e)}"))
-```
-
-**Acceptance criteria:**
-- [ ] Model list fetch does not freeze the GUI
-- [ ] Failed model fetch shows error but does not crash the app
-- [ ] System prompt is passed verbatim as specified
-- [ ] Images are sent as `data:image/png;base64,...` in the vision request
-- [ ] `max_tokens` is set high enough for large pages (8192)
-
----
-
-## 7. Phase 5 — GUI Layout & Widgets
-
-### Task 7.1 — Application Shell
-
-```python
-import customtkinter as ctk
-
-ctk.set_appearance_mode("Dark")
-ctk.set_default_color_theme("blue")  # or "dark-blue"
-
-class App(ctk.CTk):
-    def __init__(self):
-        super().__init__()
-        self.title("Local OCR — Vision Language Model")
-        self.geometry("700x650")
-        self.minsize(500, 450)
-        # ...
-```
-
-### Task 7.2 — Layout Structure (using `CTkFrame` containers)
-
-```
-┌──────────────────────────────────────────────┐
-│  Title / App Header                           │
-├──────────────────────────────────────────────┤
-│  ┌─ File Selection ───────────────────────┐   │
-│  │  [Select File]   /path/to/file.pdf     │   │
-│  └────────────────────────────────────────┘   │
-│  ┌─ Settings ─────────────────────────────┐   │
-│  │  Server URL: [http://localhost:1234 ]  │   │
-│  │  Models:    [▼ Refresh Models]        │   │
-│  │           [ qwen/qwen3.6-27b      ▼ ]  │   │
-│  │  PDF DPI:   [ 150              ▼ ]     │   │
-│  └────────────────────────────────────────┘   │
-│  ┌────────────────────────────────────────┐   │
-│  │       [   Start OCR   ] (accented)     │   │
-│  └────────────────────────────────────────┘   │
-│  ┌─ Progress ─────────────────────────────┐   │
-│  │  ████████████████░░░░░░░░░░░░░░░░░░░░  │   │
-│  └────────────────────────────────────────┘   │
-│  ┌─ Log ──────────────────────────────────┐   │
-│  │  [Start]                               │   │
-│  │  [1/3] Converting...                   │   │
-│  │  [2/3] Sending page 1 to LM Studio...  │   │
-│  │  ...                                   │   │
-│  └────────────────────────────────────────┘   │
-└──────────────────────────────────────────────┘
-```
-
-### Task 7.3 — Widget Specifications
-
-| Widget | Type | Properties |
+| Method | Endpoint | Description |
 |---|---|---|
-| File button | `CTkButton` | text="Select File", command=`_select_file` |
-| File label | `CTkLabel` | wraps text, shows selected filename |
-| Server URL | `CTkEntry` | default="http://localhost:1234" |
-| Refresh Models | `CTkButton` | text="Refresh Models", command=`_refresh_models` |
-| Model selector | `CTkComboBox` | state="combobox" (editable), populated dynamically |
-| DPI selector | `CTkOptionMenu` | values=["100","150","200","300"], default="150" |
-| Start OCR | `CTkButton` | fg_color=accent, large padding, command=`_start_ocr` |
-| Progress bar | `CTkProgressBar` | mode="indeterminate", hidden until processing |
-| Log textbox | `CTkTextbox` | font=("Consolas", 11) or system monospace, state="normal" |
+| `GET` | `/` | Serve frontend (index.html) |
+| `GET` | `/api/health` | Health check (`{"status": "ok", "version": "2.1.0"}`) |
+| `GET` | `/api/models?url=...` | List available VLM models from server |
+| `POST` | `/api/preview` | Upload file → thumbnails (max 20 initial pages) |
+| `GET` | `/api/pdf-info?filename=...` | Total page count for cached PDF |
+| `GET` | `/api/pdf-page?filename=...&page_num=N` | Single page thumbnail (lazy-load) |
+| `POST` | `/api/ocr` | Start OCR job (multipart: file + params) |
+| `GET` | `/api/status/{job_id}` | Job status + logs + per-page results |
+| `GET` | `/api/pages/{job_id}` | Detailed per-page results |
+| `POST` | `/api/reprocess/{job_id}` | Reprocess single page with different model |
+| `GET` | `/api/stream/{job_id}` | SSE event stream (real-time updates) |
+| `GET` | `/api/download/{job_id}` | Download merged markdown (regenerated on-the-fly) |
 
-### Task 7.4 — Responsive Layout
+### 4.1 SSE Event Format
 
-- Use `.grid()` with `rowconfigure`/`columnconfigure` weights for expandable areas
-- Log textbox gets `sticky="nsew"` and `rowconfigure(weight=1)` so it grows/shrinks
-- Use `ctk.CTkScrollableFrame` for settings if needed on small windows
+Each SSE event contains a JSON-serialized `JobState.to_dict()`:
 
-### Task 7.5 — Log Textbox Autoscroll
-
-```python
-def _log(self, msg):
-    self._log_box.insert("end", msg + "\n")
-    self._log_box.see("end")
+```json
+{
+  "job_id": "a1b2c3d4",
+  "status": "processing",
+  "filename": "document.pdf",
+  "total_pages": 10,
+  "processed_pages": 5,
+  "message": "",
+  "output_path": "",
+  "logs": ["[Start] Processing PDF...", "[1/10] Page 1: text extracted", ...],
+  "created_at": 1234567890.0,
+  "page_results": {
+    "1": {"page_num": 1, "markdown": "...", "model": "(text-extract)", "method": "text_extract", "status": "done", "error_msg": ""},
+    "2": {"page_num": 2, "markdown": "...", "model": "llava:13b", "method": "vlm", "status": "done", "error_msg": ""}
+  }
+}
 ```
 
-**Acceptance criteria:**
-- [ ] Dark theme is active by default
-- [ ] All widgets render correctly at minimum window size (500×450)
-- [ ] Layout is responsive — log area expands when window is resized
-- [ ] Monospace font on log textbox
-- [ ] Log textbox auto-scrolls to bottom on new entries
+### 4.2 OCR Request Parameters
 
----
-
-## 8. Phase 6 — Event Wiring & Integration
-
-### Task 8.1 — `_start_ocr()` Entry Point
-
-```python
-def _start_ocr(self):
-    if not self._selected_file:
-        messagebox.showwarning("No file", "Please select a file first.")
-        return
-
-    model = self._model_combo.get()
-    url = self._url_entry.get().rstrip("/")
-    dpi = self._dpi_menu.get()
-
-    if not model:
-        messagebox.showwarning("No model", "Please select or enter a model.")
-        return
-
-    # Disable UI
-    self._start_btn.configure(state="disabled", text="Processing, please wait...")
-    self._progress_bar.start()
-    self._selected_file_path = None  # prevent re-select
-
-    ext = os.path.splitext(self._selected_file)[1].lower()
-    if ext in IMAGE_EXTENSIONS:
-        threading.Thread(target=_process_image_worker,
-                         args=(self._selected_file,),
-                         daemon=True).start()
-    else:  # PDF
-        threading.Thread(target=_process_pdf_worker,
-                         args=(self._selected_file, dpi),
-                         daemon=True).start()
+```
+POST /api/ocr  (multipart/form-data)
+├── file: UploadFile (required)
+├── model: str (required)
+├── url: str (default: "http://localhost:1234")
+├── dpi: int (default: 150)
+├── force_vlm: bool (default: false)
+└── page_spec: str (default: "all")
 ```
 
-### Task 8.2 — `_refresh_models()` Entry Point
+---
 
-```python
-def _refresh_models(self):
-    url = self._url_entry.get().rstrip("/")
-    threading.Thread(target=_refresh_models_worker,
-                     args=(url,),
-                     daemon=True).start()
+## 5. Data Flow
+
+### 5.1 Normal OCR Flow
+
+```
+Browser                          FastAPI Server                    LM Studio
+   │                                 │                                │
+   │  POST /api/preview (file)       │                                │
+   │────────────────────────────────>│                                │
+   │                                 │  fitz.open(stream)             │
+   │  ← thumbnails (max 20)         │                                │
+   │<────────────────────────────────│                                │
+   │                                 │                                │
+   │  POST /api/ocr (file + params)  │                                │
+   │────────────────────────────────>│                                │
+   │  ← { job_id }                  │                                │
+   │<────────────────────────────────│                                │
+   │                                 │  BackgroundTasks.add_task()    │
+   │  GET /api/stream/{job_id}       │                                │
+   │────────────────────────────────>│                                │
+   │                                 │  For each page:                │
+   │  SSE: status updates            │    _is_text_page()?            │
+   │<───────────────────────────────│    ├─ Yes: get_text()          │
+   │                                 │    └─ No: get_pixmap()         │
+   │  [done]                         │              │                 │
+   │                                 │              │  chat.completions.create()
+   │                                 │              │─────────────────>│
+   │                                 │              │<─────────────────│
+   │  GET /api/pages/{job_id}        │                                │
+   │────────────────────────────────>│                                │
+   │  ← per-page results             │                                │
+   │<────────────────────────────────│                                │
+   │                                 │                                │
+   │  GET /api/download/{job_id}     │                                │
+   │────────────────────────────────>│                                │
+   │  ← merged .md file              │                                │
+   │<────────────────────────────────│                                │
 ```
 
-### Task 8.3 — `_populate_model_dropdown(model_ids)`
+### 5.2 Reprocess Flow
 
-- Clear existing values
-- Set `values=model_ids` on the combo box
-- If first load and list is non-empty, set default to first model
-
-### Task 8.4 — Error Handling & UI Recovery
-
-- All worker exceptions are caught and reported via `Event("error", ...)`
-- `_finish_processing()` always re-enables the button regardless of outcome
-- Model fetch failure does not clear existing dropdown entries
-
-**Acceptance criteria:**
-- [ ] "Start OCR" is disabled during processing
-- [ ] Progress bar runs in indeterminate mode during processing
-- [ ] Only one background operation runs at a time
-- [ ] Button text changes to "Processing, please wait..."
-- [ ] UI recovers to normal state after success or error
-- [ ] Native `messagebox` popups appear on completion/error
-
----
-
-## 9. Phase 7 — Testing & Polish
-
-### Task 9.1 — Manual Test Scenarios
-
-| # | Scenario | Expected Result |
-|---|---|---|
-| 1 | Launch app, no file selected, click "Start OCR" | Warning messagebox |
-| 2 | Select a .png image, start OCR | Image sent to VLM, `_extracted.md` created |
-| 3 | Select a multi-page PDF at 300 DPI | Each page rendered, combined result saved |
-| 4 | Click "Refresh Models" with unreachable server | Error message in log, no crash |
-| 5 | Click "Refresh Models" with running server | Dropdown populated with model list |
-| 6 | Manually type a model name (not in list), start OCR | Request sent with typed model name |
-| 7 | Close app while processing | Clean exit (daemon threads) |
-| 8 | Resize window to minimum | No widget clipping |
-| 9 | Select file, change URL, start OCR | Uses new URL |
-| 10 | Process PDF, check temp dir is cleaned | No leftover temp files |
-
-### Task 9.2 — Edge Cases
-
-- [ ] Empty PDF (0 pages) → graceful error message
-- [ ] Very large image → ensure base64 encoding doesn't exceed model context
-- [ ] Network timeout during VLM call → caught, reported, UI recovers
-- [ ] Output file already exists → overwrite (spec doesn't mention preservation)
-- [ ] Non-standard image format → rejected at file selection
-
-### Task 9.3 — Code Quality
-
-- [ ] All worker functions have try/except/finally as needed
-- [ ] No Tk calls from background threads
-- [ ] Temp files always cleaned up
-- [ ] Code is well-commented (docstrings on major functions)
-- [ ] `requirements.txt` versions pinned with minimums
-
-### Task 9.4 — Documentation
-
-- [ ] `README.md` with install instructions, usage guide, and LM Studio setup notes
+```
+Browser                          FastAPI Server                    LM Studio
+   │                                 │                                │
+   │  POST /api/reprocess/{job_id}   │                                │
+   │  (page_num, model, url, dpi)    │                                │
+   │────────────────────────────────>│                                │
+   │                                 │  fitz.open(stored file_bytes)   │
+   │                                 │  page.get_pixmap(dpi)          │
+   │                                 │              │                 │
+   │                                 │              │  chat.completions.create()
+   │                                 │              │─────────────────>│
+   │  ← { status: "ok", ... }       │              │<─────────────────│
+   │<────────────────────────────────│                                │
+   │                                 │  _update_page_result()         │
+   │                                 │  _write_merged_output()        │
+```
 
 ---
 
-## 10. Risk Register & Mitigations
+## 6. Concurrency Model
 
-| Risk | Impact | Mitigation |
-|---|---|---|
-| LM Studio server unavailable | User can't process files | Clear error messages; manual model entry still works |
-| Large PDFs (100+ pages) | Long processing time, potential OOM | Progress logging keeps user informed; consider adding a "cancel" in future |
-| VLM context window exceeded | Truncated output | `max_tokens=8192` should handle most pages; could add chunking later |
-| `customtkinter` version incompatibility | GUI crashes | Pin minimum version in `requirements.txt` |
-| `pymupdf` licensing (AGPL) | Legal concern for redistribution | Fine for personal/local use; noted in README |
-| Base64 image too large for API | Request rejected | Could add image resizing as future enhancement |
+```
+┌─────────────────────────────────────────────────────────────┐
+│  FastAPI (async event loop)                                  │
+│                                                              │
+│  ┌─ Request Handlers (async) ────────────────────────────┐   │
+│  │  - /api/ocr → creates JobState, queues BackgroundTask │   │
+│  │  - /api/stream/{id} → SSE generator (async)           │   │
+│  │  - /api/status/{id} → reads jobs dict (sync, locked)  │   │
+│  │  - /api/reprocess/{id} → sync handler (blocks briefly)│   │
+│  └───────────────────────────────────────────────────────┘   │
+│                                                              │
+│  ┌─ BackgroundTasks (run in thread pool) ─────────────────┐  │
+│  │  - run_ocr_job() → process_pdf() or process_image()    │  │
+│  │    └─ _process_single_page() (per page, sequential)    │  │
+│  │       └─ _send_page_to_vlm() (HTTP call to LM Studio) │  │
+│  └───────────────────────────────────────────────────────┘  │
+│                                                              │
+│  ┌─ Shared State (thread-safe) ───────────────────────────┐  │
+│  │  - jobs: dict[str, JobState]                            │  │
+│  │  - jobs_lock: threading.Lock                            │  │
+│  │  - preview_cache: dict[str, tuple[bytes, str]]          │  │
+│  └───────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Key points:**
+- OCR jobs run in FastAPI `BackgroundTasks` (thread pool executor)
+- Job state is protected by `threading.Lock`
+- SSE stream polls job state every 500ms (non-blocking, async)
+- Reprocess endpoint is synchronous (blocks until page is reprocessed)
+- No two OCR jobs for the same `job_id` can run simultaneously
 
 ---
 
-## 11. File Map (Final)
+## 7. File Map
 
 ```
 myocr/
-├── Local_OCR.md                  # Original specification
-├── IMPLEMENTATION_PLAN.md        # This plan
-├── main.py                       # Complete application (~350-450 lines)
-├── requirements.txt              # Dependencies
-└── README.md                     # User documentation
+├── main.py                       # FastAPI backend (all-in-one)
+│   ├── Constants & helpers
+│   ├── PageResult / JobState dataclasses
+│   ├── OCR core engine
+│   ├── Job workers
+│   └── FastAPI app + endpoints
+│
+├── frontend/                     # Single-page web application
+│   ├── index.html               # Layout + modals + zero-md
+│   ├── js/app.js                # UI controller (~800 lines)
+│   └── css/style.css            # Responsive dark theme
+│
+├── outputs/                      # OCR results (git-ignored)
+│   └── *.md                     # One per processed document
+│
+├── requirements.txt              # Python dependencies
+├── run.sh                        # Quick-start script
+├── .gitignore                    # Excludes outputs/, .venv/, __pycache__/
+├── README.md                     # User documentation
+├── Local_OCR.md                  # Original v1.x specification (historical)
+├── IMPLEMENTATION_PLAN.md        # This file (v2.x architecture)
+└── IOS_PORTING_ANALYSIS.md       # iOS port analysis (historical)
 ```
 
 ---
 
-## Implementation Order Summary
+## 8. Migration Notes (v1.x → v2.x)
 
-```
-Phase 1: Scaffolding        → 15 min
-Phase 2: Worker Engine      → 20 min
-Phase 3: File Processing    → 25 min
-Phase 4: LM Studio API      → 20 min
-Phase 5: GUI Layout         → 30 min
-Phase 6: Event Wiring       → 20 min
-Phase 7: Testing & Polish   → 20 min
-─────────────────────────────────────
-Total estimated effort: ~2.5 hours
-```
+### What Changed
+
+| Feature | v1.x (Tkinter) | v2.x (Web) |
+|---|---|---|
+| **GUI Framework** | `customtkinter` (desktop) | FastAPI + vanilla JS (web) |
+| **Concurrency** | `threading` + `queue.Queue` + `.after()` polling | `BackgroundTasks` + SSE streaming |
+| **Output Location** | `_extracted.md` alongside source file | `outputs/` directory |
+| **Page Processing** | All-or-nothing (entire PDF) | Per-page tracking + reprocessing |
+| **Preview** | None (black-box processing) | PDF thumbnails + lazy-load + navigation |
+| **Webcam** | Not supported | Full support with multi-page capture |
+| **Page Selection** | All pages only | Custom ranges (e.g., "1-5,8") |
+| **Force VLM** | Not available | Checkbox to bypass text extraction |
+| **Real-time Feedback** | Log textbox via event queue | SSE streaming + progress bar |
+| **Markdown Rendering** | Not rendered (file saved only) | `zero-md` with math/syntax highlighting |
+| **Download** | File auto-saved to disk | On-demand download via API |
+| **Architecture** | Single-file monolithic app | Client-server (backend + frontend) |
+
+### Backward Compatibility
+
+- `pymupdf` and `openai` SDK usage is identical
+- System prompt and VLM interaction logic unchanged
+- LM Studio server URL and model selection work the same way
+- The `customtkinter` dependency was removed from `requirements.txt`
 
 ---
 
-*This plan is designed to be executed sequentially. Each phase builds on the previous one, and acceptance criteria provide clear checkpoints. The single-file architecture keeps the project simple to distribute and run.*
+*This document describes the current v2.1 architecture. For the original v1.x specification, see `Local_OCR.md`.*
