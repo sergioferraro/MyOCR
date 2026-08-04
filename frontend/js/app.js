@@ -1109,8 +1109,9 @@ function applyPostProcessing(processType) {
   zeroMdScript.textContent = processedText;
   
   // Force re-render of zero-md
-  const event = new Event('change', { bubbles: true });
-  zeroMdScript.dispatchEvent(event);
+  zeroMdResult.render().catch(err => {
+    console.error('zero-md render error:', err);
+  });
 }
 
 // ── Reset for new OCR ────────────────────────────────────────────
@@ -1166,7 +1167,9 @@ btnCompactAll.addEventListener('click', () => {
   }
   
   zeroMdScript.textContent = fullMarkdown.trim();
-  zeroMdScript.dispatchEvent(new Event('change', { bubbles: true }));
+  zeroMdResult.render().catch(err => {
+    console.error('zero-md render error:', err);
+  });
 });
 
 btnHyphenationAll.addEventListener('click', () => {
@@ -1184,7 +1187,9 @@ btnHyphenationAll.addEventListener('click', () => {
   }
   
   zeroMdScript.textContent = fullMarkdown.trim();
-  zeroMdScript.dispatchEvent(new Event('change', { bubbles: true }));
+  zeroMdResult.render().catch(err => {
+    console.error('zero-md render error:', err);
+  });
 });
 
 // ── Init ─────────────────────────────────────────────────────────
