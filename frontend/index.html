@@ -145,42 +145,7 @@
         <div class="markdown-container">
           <!-- zero-md: renders markdown with math (KaTeX), mermaid, syntax highlighting -->
           <zero-md id="zeroMdResult" class="hidden" no-auto>
-            <template>
-              <!-- Dark theme styles matching our app -->
-              <style>
-                :host { display: block; }
-                .markdown-body {
-                  font-size: 0.88rem !important;
-                  line-height: 1.7 !important;
-                  color: var(--text-primary) !important;
-                  background: transparent !important;
-                }
-                .markdown-body h1, .markdown-body h2, .markdown-body h3 {
-                  color: #569cd6 !important;
-                }
-                .markdown-body a {
-                  color: var(--accent) !important;
-                }
-                .markdown-body code {
-                  background: var(--bg-card) !important;
-                }
-                .markdown-body pre {
-                  background: var(--bg-card) !important;
-                }
-                .markdown-body table th {
-                  background: var(--bg-card) !important;
-                }
-                .markdown-body blockquote {
-                  border-left-color: var(--accent) !important;
-                }
-              </style>
-              <!-- GitHub markdown base -->
-              <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/github-markdown-css@5/github-markdown.min.css" />
-              <!-- Highlight.js dark theme -->
-              <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11/styles/github-dark.min.css" />
-              <!-- KaTeX for math -->
-              <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0/dist/katex.min.css" />
-            </template>
+            <template><style>:host { display: block; }.markdown-body { font-size: 0.88rem !important; line-height: 1.7 !important; color: var(--text-primary) !important; background: transparent !important; }.markdown-body h1, .markdown-body h2, .markdown-body h3 { color: #569cd6 !important; }.markdown-body a { color: var(--accent) !important; }.markdown-body code { background: var(--bg-card) !important; }.markdown-body pre { background: var(--bg-card) !important; }.markdown-body table th { background: var(--bg-card) !important; }.markdown-body blockquote { border-left-color: var(--accent) !important; }</style><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/github-markdown-css@5/github-markdown.min.css" /><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11/styles/github-dark.min.css" /><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0/dist/katex.min.css" /></template>
             <script type="text/markdown" id="zeroMdScript"></script>
           </zero-md>
         </div>
