@@ -1045,17 +1045,44 @@ btnDownload.addEventListener('click', async () => {
 function compactMarkdown(text) {
   if (!text || typeof text !== 'string') return text;
   
-  // Remove single line breaks within paragraphs (keep double line breaks for new paragraphs)
-  // This regex matches lines that don't end with punctuation or are not empty
-  return text.replace(/([^.\n])\n(?=[^.\n])/g, '$1 ');
+  // Step 1: Normalize line endings
+  text = text.replace(/\r\n/g, '\n');
+  
+  // Step 2: Keep double line breaks (paragraph separators) intact
+  // Replace double line breaks with a placeholder
+  text = text.replace(/\n\n/g, '\n\n\n');
+  
+  // Step 3: Remove single line breaks within paragraphs
+  // Join lines that don't end with sentence-ending punctuation
+  text = text.replace(/([^.!?])\n(?![\s#*\-|>])/g, '$1 ');
+  
+  // Step 4: Restore double line breaks
+  text = text.replace(/\n\n\n/g, '\n\n');
+  
+  // Step 5: Clean up any remaining excessive whitespace
+  text = text.replace(/  +/g, ' ');
+  
+  // Step 6: Remove empty lines within paragraphs
+  text = text.replace(/\n\n+/g, '\n\n');
+  
+  return text;
 }
 
 /** Fix hyphenation: join words split across lines */
 function fixHyphenation(text) {
   if (!text || typeof text !== 'string') return text;
   
-  // Match hyphen at end of line followed by lowercase letter (common hyphenation pattern)
-  return text.replace(/(-)\n([a-z])/g, '$1$2');
+  // Match hyphen at end of line followed by continuation (common hyphenation patterns)
+  // Handles: word-\ncontinuation, word-\n\ncontinuation, and various whitespace scenarios
+  text = text.replace(/(\w)-\s*\n\s*(\w)/g, '$1$2');
+  
+  // Also handle soft hyphens (Unicode U+00AD) and non-breaking hyphens
+  text = text.replace(/(\w)\u00AD\s*\n\s*(\w)/g, '$1$2');
+  
+  // Handle hyphenation in the middle of words (not at word boundaries)
+  text = text.replace(/([a-zA-Z])-\s*\n\s*([a-zA-Z])/g, '$1$2');
+  
+  return text;
 }
 
 // Apply post-processing to current markdown result
