@@ -39,7 +39,8 @@ MODEL = "qwen/qwen3-vl-30b"
 DPI = 150
 BASE_DIR = Path(__file__).parent
 
-DEFAULT_PDF = BASE_DIR / "(Analisi Matematica I)Esercizi svolti e richiami di successioni reali e serie numeriche.pdf"
+# DEFAULT_PDF = BASE_DIR / "(Analisi Matematica I)Esercizi svolti e richiami di successioni reali e serie numeriche.pdf"
+DEFAULT_PDF = BASE_DIR / "Springer - Mathematical Problems in Image Processing.pdf"
 
 client = OpenAI(base_url=f"{LM_STUDIO_URL}/v1", api_key="not-needed")
 
@@ -146,7 +147,9 @@ IMPORTANT RULES:
 1. IGNORE any UI elements, sidebars, toolbars, navigation icons, or
    interface artifacts that are NOT part of the document content itself.
    (e.g. numbered page buttons, arrow icons, pencil icons, question mark
-   icons along the edges of the page)
+   icons along the edges of the page). If the page has ONLY such UI
+   artifacts and no real document content to preserve as images,
+   leave the BOXES section EMPTY.
 
 2. When you encounter a chart, graph, diagram, figure, photograph, or
    any visual element that cannot be accurately represented as text,
@@ -154,14 +157,23 @@ IMPORTANT RULES:
    ![brief description](IMG_N)
    where N is a sequential number starting from 1.
 
-3. After the markdown content, add a BOXES section with delimiters.
+3. MATHEMATICAL FORMULAS AND EQUATIONS ARE NOT VISUAL ELEMENTS.
+   They MUST be transcribed as LaTeX math in the markdown text.
+   Do NOT create bounding boxes for formulas, equations, or any
+   mathematical notation. Only create boxes for charts, graphs,
+   diagrams, photographs, and illustrative figures.
+
+4. Limit the number of visual elements to at most 5 per page.
+   If you find more, only report the most significant ones.
+
+5. After the markdown content, add a BOXES section with delimiters.
    Each box entry MUST use this exact format:
    <box>(x1,y1,x2,y2)</box> | IMG_N | description
 
    Coordinates are normalized to 0-1000.
    The IMG_N label MUST match the placeholder number used in the text.
 
-4. If the page contains ONLY text (no charts/graphs/figures to preserve),
+6. If the page contains ONLY text (no charts/graphs/figures to preserve),
    output the text and an empty BOXES section.
 
 OUTPUT FORMAT (follow this structure exactly):
@@ -222,59 +234,22 @@ TESTS = [
     },
     {
         "id": 4,
-        "name": "OPTIMIZED — OCR + inline placeholders + delimiters + ignore UI",
+        "name": "OPTIMIZED v2 — OCR + inline placeholders + delimiters + ignore UI + math-safe",
         "system": (
             "You are a document OCR assistant. Extract text as markdown. "
             "Use LaTeX for math. Use placeholders for non-text visual elements. "
-            "Ignore UI/sidebar artifacts."
+            "Ignore UI/sidebar artifacts. Math formulas are NOT visual elements."
         ),
         "user": PROMPT_TEST4_OPTIMIZED,
         "description": (
-            "Prompt ottimizzato: qualità OCR del Test 2 + placeholder inline "
-            "![desc](IMG_N) + delimitatori ===TEXT_START=== + box con <box>() "
-            "+ istruzioni per ignorare icone UI laterali."
+            "v2: aggiunta regola esplicita 'formule matematiche NON sono elementi "
+            "visivi' + limite max 5 box/pagina + box vuoti se solo icone UI. "
+            "Qualità OCR del Test 2 + placeholder inline + delimitatori + <box>()."
         ),
     },
 ]
 
-TESTS = [
-    {
-        "id": 1,
-        "name": "Grounding base — <box> token detection",
-        "system": "You are a helpful document analysis assistant.",
-        "user": PROMPT_TEST1_GROUNDING,
-        "description": (
-            "Verifica che LM Studio non strip-pi i <box>(x1,y1,x2,y2)</box> tokens "
-            "e che il modello sappia localizzare elementi visivi."
-        ),
-    },
-    {
-        "id": 2,
-        "name": "OCR + grounding combinato",
-        "system": (
-            "Convert this image into Markdown text format. "
-            "Preserve document structure. Do not add greetings or explanations."
-        ),
-        "user": PROMPT_TEST2_OCR_GROUNDING,
-        "description": (
-            "Verifica che il modello faccia OCR del testo E segnali grafici "
-            "con placeholder + bounding box."
-        ),
-    },
-    {
-        "id": 3,
-        "name": "Output semi-strutturato (delimitatori)",
-        "system": (
-            "You are a document analysis assistant. Return structured output "
-            "with delimiters. Be precise and concise."
-        ),
-        "user": PROMPT_TEST3_STRUCTURED,
-        "description": (
-            "Verifica che il modello rispetti il formato con delimitatori "
-            "===TEXT_START=== / ===BOXES_START=== ecc."
-        ),
-    },
-]
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -370,16 +345,16 @@ def validate_test4_format(text: str, test_id: int):
         print(f"    SKIP: delimiters missing, cannot validate further")
         return
 
-    # 2. Extract sections
+    # 2. Extract sections (robust regex — handles whitespace variations)
     text_section = ""
     if has_text:
-        m = re.search(r"===TEXT_START===\s*\n(.*?)\n===TEXT_END===", text, re.DOTALL)
+        m = re.search(r"===TEXT_START===\s*\n?(.*?)\n?=+=+TEXT_END=+=+", text, re.DOTALL)
         if m:
             text_section = m.group(1)
 
     boxes_section = ""
     if has_boxes:
-        m = re.search(r"===BOXES_START===\s*\n(.*?)\n===BOXES_END===", text, re.DOTALL)
+        m = re.search(r"===BOXES_START===\s*\n?(.*?)\n?=+=+BOXES_END=+=+", text, re.DOTALL)
         if m:
             boxes_section = m.group(1)
 
@@ -389,9 +364,10 @@ def validate_test4_format(text: str, test_id: int):
     for desc, num in placeholders:
         print(f"      IMG_{num}: {desc.strip()}")
 
-    # 4. Parse box entries
+    # 4. Parse box entries (robust — handles spaces around |)
     box_pattern = re.compile(
-        r"<box>\((\d+),(\d+),(\d+),(\d+)\)</box>\s*\|\s*IMG_(\d+)\|\s*(.+)"
+        r"<box>\s*\(?\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)?\s*</box>"
+        r"\s*\|\s*IMG_(\d+)\s*\|\s*(.+)"
     )
     box_entries = box_pattern.findall(boxes_section)
     print(f"    Box entries:       {len(box_entries)}")
@@ -417,6 +393,8 @@ def validate_test4_format(text: str, test_id: int):
         print(f"    WARNING: boxes without placeholder: {unmatched_box}")
     if not unmatched_ph and not unmatched_box and placeholders:
         print(f"    Cross-reference:    OK (all placeholders matched)")
+    if not placeholders and not box_entries:
+        print(f"    Cross-reference:    OK (no visual elements — text-only page)")
 
     # 6. Check for malformed boxes in the full text
     malformed = re.findall(r"<box>\s*\d+,\d+,\d+,\d+\)</box>", text)
@@ -424,6 +402,10 @@ def validate_test4_format(text: str, test_id: int):
         print(f"    WARNING: {len(malformed)} malformed <box> tokens detected")
     else:
         print(f"    Malformed tokens:   none")
+
+    # 7. Check for hallucinated boxes (too many)
+    if len(box_entries) > 10:
+        print(f"    WARNING: {len(box_entries)} boxes detected — possible hallucination loop")
 
 
 # ---------------------------------------------------------------------------
