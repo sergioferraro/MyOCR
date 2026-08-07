@@ -132,6 +132,111 @@ IMPORTANT: Always include all four delimiters (===TEXT_START===,
 ===TEXT_END===, ===BOXES_START===, ===BOXES_END===).
 """
 
+# ---------------------------------------------------------------------------
+# Test 4 — Optimized: best of Test 2 (OCR quality) + delimiters + inline placeholders
+# ---------------------------------------------------------------------------
+
+PROMPT_TEST4_OPTIMIZED = """
+Convert this document page into Markdown text. Perform high-accuracy OCR
+on all textual content, preserving document structure: headers, lists,
+tables, and math formulas (use LaTeX with $...$ and $$...$$).
+
+IMPORTANT RULES:
+
+1. IGNORE any UI elements, sidebars, toolbars, navigation icons, or
+   interface artifacts that are NOT part of the document content itself.
+   (e.g. numbered page buttons, arrow icons, pencil icons, question mark
+   icons along the edges of the page)
+
+2. When you encounter a chart, graph, diagram, figure, photograph, or
+   any visual element that cannot be accurately represented as text,
+   insert a placeholder at the appropriate location in the markdown:
+   ![brief description](IMG_N)
+   where N is a sequential number starting from 1.
+
+3. After the markdown content, add a BOXES section with delimiters.
+   Each box entry MUST use this exact format:
+   <box>(x1,y1,x2,y2)</box> | IMG_N | description
+
+   Coordinates are normalized to 0-1000.
+   The IMG_N label MUST match the placeholder number used in the text.
+
+4. If the page contains ONLY text (no charts/graphs/figures to preserve),
+   output the text and an empty BOXES section.
+
+OUTPUT FORMAT (follow this structure exactly):
+
+===TEXT_START===
+# Your markdown here
+
+Some text...
+
+![bar chart showing quarterly data](IMG_1)
+
+More text below...
+===TEXT_END===
+
+===BOXES_START===
+<box>(200,400,800,700)</box> | IMG_1 | bar chart showing quarterly data
+===BOXES_END===
+
+Do NOT add greetings, explanations, or remarks outside the delimiters.
+"""
+
+TESTS = [
+    {
+        "id": 1,
+        "name": "Grounding base — <box> token detection",
+        "system": "You are a helpful document analysis assistant.",
+        "user": PROMPT_TEST1_GROUNDING,
+        "description": (
+            "Verifica che LM Studio non strip-pi i <box>(x1,y1,x2,y2)</box> tokens "
+            "e che il modello sappia localizzare elementi visivi."
+        ),
+    },
+    {
+        "id": 2,
+        "name": "OCR + grounding combinato",
+        "system": (
+            "Convert this image into Markdown text format. "
+            "Preserve document structure. Do not add greetings or explanations."
+        ),
+        "user": PROMPT_TEST2_OCR_GROUNDING,
+        "description": (
+            "Verifica che il modello faccia OCR del testo E segnali grafici "
+            "con placeholder + bounding box."
+        ),
+    },
+    {
+        "id": 3,
+        "name": "Output semi-strutturato (delimitatori)",
+        "system": (
+            "You are a document analysis assistant. Return structured output "
+            "with delimiters. Be precise and concise."
+        ),
+        "user": PROMPT_TEST3_STRUCTURED,
+        "description": (
+            "Verifica che il modello rispetti il formato con delimitatori "
+            "===TEXT_START=== / ===BOXES_START=== ecc."
+        ),
+    },
+    {
+        "id": 4,
+        "name": "OPTIMIZED — OCR + inline placeholders + delimiters + ignore UI",
+        "system": (
+            "You are a document OCR assistant. Extract text as markdown. "
+            "Use LaTeX for math. Use placeholders for non-text visual elements. "
+            "Ignore UI/sidebar artifacts."
+        ),
+        "user": PROMPT_TEST4_OPTIMIZED,
+        "description": (
+            "Prompt ottimizzato: qualità OCR del Test 2 + placeholder inline "
+            "![desc](IMG_N) + delimitatori ===TEXT_START=== + box con <box>() "
+            "+ istruzioni per ignorare icone UI laterali."
+        ),
+    },
+]
+
 TESTS = [
     {
         "id": 1,
@@ -211,27 +316,114 @@ def print_separator(title: str):
 
 def analyze_response(text: str):
     """Print a quick analysis of the raw response."""
+    import re
+
     has_box = "<box>" in text
     box_count = text.count("<box>")
     has_text_delim = "===TEXT_START===" in text and "===TEXT_END===" in text
     has_boxes_delim = "===BOXES_START===" in text and "===BOXES_END===" in text
-    has_placeholder = "![(" in text or "IMAGE_REF" in text
+    has_placeholder = "![" in text and "IMG_" in text
+
+    # Also detect malformed boxes (missing opening paren)
+    malformed = re.findall(r"<box>\s*\d+,\d+,\d+,\d+\)</box>", text)
 
     print(f"\n  [Analysis]")
     print(f"  Response length:     {len(text)} chars")
     print(f"  Contains <box>:      {has_box}")
     print(f"  <box> count:         {box_count}")
+    print(f"  Malformed <box>:     {len(malformed)}")
     print(f"  Has text delimiters: {has_text_delim}")
     print(f"  Has boxes delimiters:{has_boxes_delim}")
     print(f"  Has ![] placeholders:{has_placeholder}")
 
     if has_box:
-        import re
         boxes = re.findall(r"<box>\((\d+),(\d+),(\d+),(\d+)\)</box>", text)
         if boxes:
             print(f"\n  Detected bounding boxes:")
             for b in boxes:
                 print(f"    ({b[0]}, {b[1]}, {b[2]}, {b[3]})")
+
+
+def validate_test4_format(text: str, test_id: int):
+    """
+    Validate the optimized Test 4 output format.
+    Checks:
+      - Delimiters present
+      - Inline placeholders match box entries
+      - Box coordinates are valid (0-1000)
+      - No malformed <box> tokens
+    """
+    import re
+
+    if test_id != 4:
+        return
+
+    print(f"\n  [Test 4 Validation]")
+
+    # 1. Check delimiters
+    has_text = "===TEXT_START===" in text and "===TEXT_END===" in text
+    has_boxes = "===BOXES_START===" in text and "===BOXES_END===" in text
+    print(f"    Delimiters TEXT:  {'OK' if has_text else 'MISSING'}")
+    print(f"    Delimiters BOXES: {'OK' if has_boxes else 'MISSING'}")
+
+    if not (has_text and has_boxes):
+        print(f"    SKIP: delimiters missing, cannot validate further")
+        return
+
+    # 2. Extract sections
+    text_section = ""
+    if has_text:
+        m = re.search(r"===TEXT_START===\s*\n(.*?)\n===TEXT_END===", text, re.DOTALL)
+        if m:
+            text_section = m.group(1)
+
+    boxes_section = ""
+    if has_boxes:
+        m = re.search(r"===BOXES_START===\s*\n(.*?)\n===BOXES_END===", text, re.DOTALL)
+        if m:
+            boxes_section = m.group(1)
+
+    # 3. Parse inline placeholders from text
+    placeholders = re.findall(r"!\[([^\]]*)\]\(IMG_(\d+)\)", text_section)
+    print(f"    Inline placeholders: {len(placeholders)}")
+    for desc, num in placeholders:
+        print(f"      IMG_{num}: {desc.strip()}")
+
+    # 4. Parse box entries
+    box_pattern = re.compile(
+        r"<box>\((\d+),(\d+),(\d+),(\d+)\)</box>\s*\|\s*IMG_(\d+)\|\s*(.+)"
+    )
+    box_entries = box_pattern.findall(boxes_section)
+    print(f"    Box entries:       {len(box_entries)}")
+
+    valid_coords = True
+    for x1, y1, x2, y2, img_num, desc in box_entries:
+        coords_valid = all(0 <= int(c) <= 1000 for c in (x1, y1, x2, y2))
+        if not coords_valid:
+            valid_coords = False
+        print(f"      IMG_{img_num}: ({x1},{y1},{x2},{y2}) — {desc.strip()}")
+
+    print(f"    Coords 0-1000:     {'OK' if valid_coords else 'OUT OF RANGE'}")
+
+    # 5. Cross-reference: every placeholder has a matching box?
+    placeholder_nums = {n for _, n in placeholders}
+    box_nums = {n for _, _, _, _, n, _ in box_entries}
+    unmatched_ph = placeholder_nums - box_nums
+    unmatched_box = box_nums - placeholder_nums
+
+    if unmatched_ph:
+        print(f"    WARNING: placeholders without box: {unmatched_ph}")
+    if unmatched_box:
+        print(f"    WARNING: boxes without placeholder: {unmatched_box}")
+    if not unmatched_ph and not unmatched_box and placeholders:
+        print(f"    Cross-reference:    OK (all placeholders matched)")
+
+    # 6. Check for malformed boxes in the full text
+    malformed = re.findall(r"<box>\s*\d+,\d+,\d+,\d+\)</box>", text)
+    if malformed:
+        print(f"    WARNING: {len(malformed)} malformed <box> tokens detected")
+    else:
+        print(f"    Malformed tokens:   none")
 
 
 # ---------------------------------------------------------------------------
@@ -305,6 +497,7 @@ def main():
                 print(f"  {'-' * 76}")
 
                 analyze_response(response)
+                validate_test4_format(response, test["id"])
 
             except Exception as exc:
                 print(f"  ERROR on page {page_num}: {exc}")
@@ -315,6 +508,11 @@ def main():
     print("  2. Do coordinates look reasonable (0-1000 range)?")
     print("  3. Does the model distinguish text vs visual elements?")
     print("  4. Test 3: are the delimiters respected?")
+    print("  5. Test 4 (OPTIMIZED):")
+    print("     - Inline ![desc](IMG_N) placeholders in text?")
+    print("     - Placeholders matched to <box> entries?")
+    print("     - UI icons ignored?")
+    print("     - OCR quality comparable to Test 2?")
 
 
 if __name__ == "__main__":
