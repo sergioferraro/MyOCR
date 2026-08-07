@@ -610,17 +610,18 @@ def _write_grounding_output(job_id: str) -> str:
     images_dir = out_dir / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
 
-    # Collect all grounding images and crop them
-    # Use global counter to avoid IMG_N conflicts across pages
+    # Collect all grounding images and crop them.
+    # Build a per-page rename map so that IMG_1 on page 1 and IMG_1 on page 2
+    # get different global filenames and are replaced independently.
     global_counter = 1
-    img_rename_map: dict[str, str] = {}  # old IMG_N → new IMG_N.png
-    all_entries: list[dict] = []
+    page_rename_map: dict[int, dict[str, str]] = {}  # page_num -> { "IMG_1": "IMG_1.png", ... }
 
     for pn in sorted(job.page_results.keys()):
         pr = job.page_results[pn]
         if not pr.grounding_enabled or not pr.grounding_images:
             continue
 
+        page_rename_map[pn] = {}
         for entry in pr.grounding_images:
             old_id = entry["id"]  # e.g. "IMG_1" (from VLM, per-page)
             bbox = tuple(entry["bbox"])
@@ -640,30 +641,29 @@ def _write_grounding_output(job_id: str) -> str:
             with open(out_path, "wb") as fh:
                 fh.write(cropped_bytes)
 
-            img_rename_map[old_id] = new_filename
-            all_entries.append({"id": old_id, "image_filename": new_filename})
+            page_rename_map[pn][old_id] = new_filename
 
-    # Assemble markdown with image paths
+    # Assemble markdown — replace placeholders per-page to avoid cross-page collisions
     md_parts: list[str] = []
     for pn in sorted(job.page_results.keys()):
         pr = job.page_results[pn]
         if pr.markdown:
-            md_parts.append(pr.markdown)
+            page_md = pr.markdown
+            # Replace this page's IMG_N references with correct global filenames
+            if pn in page_rename_map:
+                for old_id, new_filename in page_rename_map[pn].items():
+                    # Replace ](IMG_N) with ](images/IMG_N.png)
+                    # Use a regex to only replace the link part, not any stray text
+                    page_md = re.sub(
+                        rf"\]\(({re.escape(old_id)})\)",
+                        f"](images/{new_filename})",
+                        page_md,
+                    )
+            md_parts.append(page_md)
         elif pr.status == "error":
             md_parts.append(f"\n\n<!-- Page {pn}: error — {pr.error_msg} -->\n\n")
 
     markdown_text = "\n\n".join(md_parts)
-
-    # Replace IMG_N references with images/IMG_N.png paths
-    # The VLM outputs ![desc](IMG_N) — we need ![desc](images/IMG_N.png)
-    for entry in all_entries:
-        img_id = entry["id"]  # e.g. "IMG_1"
-        img_filename = entry["image_filename"]  # e.g. "IMG_1.png"
-        # Replace ](IMG_N) with ](images/IMG_N.png)
-        markdown_text = markdown_text.replace(
-            f"]({img_id})",
-            f"](images/{img_filename})",
-        )
 
     # Write extracted.md
     md_path = out_dir / "extracted.md"

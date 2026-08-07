@@ -998,59 +998,79 @@ function renderPageResultsList() {
 async function resolveGroundingImages(markdown, jobId) {
   if (!groundingEnabled) return markdown;
 
-  // Match both forms: ![desc](IMG_N) and ![desc](images/IMG_N.png)
-  const matches = markdown.match(/!\[([^\]]+)\]\((images\/)?IMG_(\d+)(\.png)?\)/g) || [];
-  const imgRefs = new Set();  // "IMG_N" references
-
-  for (const match of matches) {
-    const m = match.match(/IMG_(\d+)/);
-    if (m) imgRefs.add(`IMG_${m[1]}`);
-  }
-
-  if (imgRefs.size === 0) return markdown;
-
-  // Build a map IMG_N → page_num from pageResults
-  const imgToPage = {};
+  // Build a per-page ordered list of image entries.
+  // Since the VLM re-numbers from IMG_1 on every page, we need to know
+  // which page each IMG_N in the markdown belongs to.
+  // Strategy: build a list of {imgId, pageNum} in page order, then
+  // for each IMG_N occurrence in the markdown, pick the next entry
+  // from that imgId's queue.
+  const imgQueues = {};  // imgId -> [{pageNum, imgIndex}, ...]
   for (const pr of pageResults) {
     if (pr.grounding_images) {
-      for (const entry of pr.grounding_images) {
-        if (entry.id) imgToPage[entry.id] = pr.page_num;
+      for (let i = 0; i < pr.grounding_images.length; i++) {
+        const entry = pr.grounding_images[i];
+        if (!entry.id) continue;
+        if (!imgQueues[entry.id]) imgQueues[entry.id] = [];
+        imgQueues[entry.id].push({ pageNum: pr.page_num, imgIndex: i });
       }
     }
   }
 
-  // Load images: for each IMG_N, find the page that owns it, then crop on-the-fly
-  for (const imgRef of imgRefs) {
-    const cacheKey = `${jobId}_${imgRef}`;
-    if (groundingImageCache[cacheKey]) continue;
+  // Check if there's anything to resolve
+  const hasImages = Object.keys(imgQueues).length > 0;
+  if (!hasImages) return markdown;
 
-    // Find which page has this image
-    const pageNum = imgToPage[imgRef];
-    if (!pageNum) {
-      console.warn(`Grounding: no page found for ${imgRef}`);
-      continue;
-    }
+  // Pre-fetch all unique (page_num, imgIndex) combos
+  const fetchPromises = [];
+  const seenKeys = new Set();
+  for (const entries of Object.values(imgQueues)) {
+    for (const e of entries) {
+      const key = `${jobId}_${e.pageNum}_${e.imgIndex}`;
+      if (seenKeys.has(key)) continue;
+      seenKeys.add(key);
 
-    // Fetch cropped image from the API (it crops on-the-fly from stored page bytes)
-    const imgFilename = `${imgRef}.png`;
-    try {
-      const res = await fetch(`/api/download-image/${jobId}/${imgFilename}?page_num=${pageNum}`);
-      if (res.ok) {
-        const blob = await res.blob();
-        const dataUri = await blobToDataUri(blob);
-        groundingImageCache[cacheKey] = dataUri;
+      // Find the actual image filename from pageResults
+      const pr = pageResults.find(p => p.page_num === e.pageNum);
+      if (!pr || !pr.grounding_images[e.imgIndex]) continue;
+      const imgFilename = pr.grounding_images[e.imgIndex].image_filename || `${pr.grounding_images[e.imgIndex].id}.png`;
+
+      if (!groundingImageCache[key]) {
+        fetchPromises.push(
+          fetch(`/api/download-image/${jobId}/${imgFilename}?page_num=${e.pageNum}`)
+            .then(res => res.ok ? res.blob() : null)
+            .then(blob => {
+              if (blob) {
+                return blobToDataUri(blob).then(uri => {
+                  groundingImageCache[key] = uri;
+                });
+              }
+            })
+            .catch(() => {}),
+        );
       }
-    } catch (err) {
-      console.warn(`Grounding: failed to load ${imgFilename}`, err);
     }
   }
 
-  // Replace all placeholder references with data URIs
-  // Handle both ![desc](IMG_N) and ![desc](images/IMG_N.png)
+  if (fetchPromises.length > 0) {
+    await Promise.all(fetchPromises);
+  }
+
+  // Replace placeholders — track occurrence count per imgId
+  const occCount = {};  // imgId -> how many times seen so far
   markdown = markdown.replace(
     /(!\[[^\]]*\])\((images\/)?IMG_(\d+)(\.png)?\)/g,
     (full, altPart, prefix, num, ext) => {
-      const cacheKey = `${jobId}_IMG_${num}`;
+      const imgId = `IMG_${num}`;
+      const queue = imgQueues[imgId];
+      if (!queue) return full;
+
+      const idx = occCount[imgId] || 0;
+      occCount[imgId] = idx + 1;
+
+      if (idx >= queue.length) return full; // safety guard
+
+      const entry = queue[idx];
+      const cacheKey = `${jobId}_${entry.pageNum}_${entry.imgIndex}`;
       const dataUri = groundingImageCache[cacheKey];
       if (dataUri) {
         return `${altPart}(${dataUri})`;
