@@ -39,8 +39,8 @@ MODEL = "qwen/qwen3-vl-30b"
 DPI = 150
 BASE_DIR = Path(__file__).parent
 
-# DEFAULT_PDF = BASE_DIR / "(Analisi Matematica I)Esercizi svolti e richiami di successioni reali e serie numeriche.pdf"
-DEFAULT_PDF = BASE_DIR / "Springer - Mathematical Problems in Image Processing.pdf"
+DEFAULT_PDF = BASE_DIR / "(Analisi Matematica I)Esercizi svolti e richiami di successioni reali e serie numeriche.pdf"
+# DEFAULT_PDF = BASE_DIR / "Springer - Mathematical Problems in Image Processing.pdf"
 
 client = OpenAI(base_url=f"{LM_STUDIO_URL}/v1", api_key="not-needed")
 

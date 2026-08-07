@@ -21,6 +21,9 @@ import shutil
 import tempfile
 import threading
 import time
+import re
+import io
+import zipfile
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any
@@ -30,6 +33,7 @@ from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse, JSO
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI
+from PIL import Image
 import fitz  # pymupdf
 
 # ---------------------------------------------------------------------------
@@ -50,6 +54,86 @@ SYSTEM_PROMPT = (
     "any greetings, explanations, or introductory/concluding remarks. Output only "
     "the raw recognized text."
 )
+
+# ── Grounding prompts (validati: Test 4 v2, context 32000 tokens) ──────
+
+GROUNDING_SYSTEM_PROMPT = (
+    "You are a document OCR assistant. Extract text as markdown. "
+    "Use LaTeX for math. Use placeholders for non-text visual elements. "
+    "Ignore UI/sidebar artifacts. Math formulas are NOT visual elements."
+)
+
+GROUNDING_USER_PROMPT = """
+Convert this document page into Markdown text. Perform high-accuracy OCR
+on all textual content, preserving document structure: headers, lists,
+tables, and math formulas (use LaTeX with $...$ and $$...$$).
+
+IMPORTANT RULES:
+
+1. IGNORE any UI elements, sidebars, toolbars, navigation icons, or
+   interface artifacts that are NOT part of the document content itself.
+   (e.g. numbered page buttons, arrow icons, pencil icons, question mark
+   icons along the edges of the page). If the page has ONLY such UI
+   artifacts and no real document content to preserve as images,
+   leave the BOXES section EMPTY.
+
+2. When you encounter a chart, graph, diagram, figure, photograph, or
+   any visual element that cannot be accurately represented as text,
+   insert a placeholder at the appropriate location in the markdown:
+   ![brief description](IMG_N)
+   where N is a sequential number starting from 1.
+
+   **CRITICAL**: Do NOT transcribe the figure content as regular text.
+   Replace the figure and its caption with the placeholder.
+   Example: instead of writing
+       "Figure 1.2. A digital image is a two-dimensional array of pixels."
+   write
+       "![Digital image as a 2D array of pixels](IMG_1)"
+   and add the corresponding bounding box in the BOXES section.
+
+   Every placeholder IMG_N in the text MUST have a matching box entry
+   in ===BOXES_START===...===BOXES_END===. Never list more boxes than
+   placeholders, and never list fewer.
+
+3. MATHEMATICAL FORMULAS AND EQUATIONS ARE NOT VISUAL ELEMENTS.
+   They MUST be transcribed as LaTeX math in the markdown text.
+   Do NOT create bounding boxes for formulas, equations, or any
+   mathematical notation. Only create boxes for charts, graphs,
+   diagrams, photographs, and illustrative figures.
+
+4. Limit the number of visual elements to at most 5 per page.
+   If you find more, only report the most significant ones.
+
+5. After the markdown content, add a BOXES section with delimiters.
+   Each box entry MUST use this exact format:
+   <box>(x1,y1,x2,y2)</box> | IMG_N | description
+
+   Coordinates are normalized to 0-1000.
+   The IMG_N label MUST match the placeholder number used in the text.
+
+6. If the page contains ONLY text (no charts/graphs/figures to preserve),
+   output the text and an empty BOXES section.
+
+OUTPUT FORMAT (follow this structure exactly):
+
+===TEXT_START===
+# Your markdown here
+
+Some text...
+
+![bar chart showing quarterly data](IMG_1)
+
+More text below...
+===TEXT_END===
+
+===BOXES_START===
+<box>(200,400,800,700)</box> | IMG_1 | bar chart showing quarterly data
+===BOXES_END===
+
+Do NOT add greetings, explanations, or remarks outside the delimiters.
+"""
+
+GROUNDING_MAX_TOKENS = 32000
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -116,9 +200,20 @@ class PageResult:
     page_num: int               # 1-based page number
     markdown: str = ""          # extracted markdown text
     model: str = ""             # model used for this page
-    method: str = ""            # "text_extract" | "vlm" | ""
+    method: str = ""            # "text_extract" | "vlm" | "vlm_grounding" | ""
     status: str = "pending"     # pending | processing | done | error
     error_msg: str = ""
+
+    # Nuovi campi grounding
+    grounding_images: list[dict] = field(default_factory=list)
+    # Ogni entry: {
+    #   "id": "IMG_1",
+    #   "description": "bar chart showing quarterly revenue",
+    #   "bbox": [x1, y1, x2, y2],       # normalizzate 0-1000
+    #   "image_filename": "IMG_1.png",  # salvato in images/
+    # }
+    grounding_enabled: bool = False
+    page_image_bytes: bytes = b""   # PNG bytes della pagina intera (per crop differito)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -128,6 +223,8 @@ class PageResult:
             "method": self.method,
             "status": self.status,
             "error_msg": self.error_msg,
+            "grounding_images": self.grounding_images,
+            "grounding_enabled": self.grounding_enabled,
         }
 
 
@@ -151,6 +248,10 @@ class JobState:
     file_bytes: bytes = b""       # stored PDF bytes for reprocessing
     page_results: dict[int, PageResult] = field(default_factory=dict)
 
+    # Grounding
+    grounding_enabled: bool = False
+    output_dir: str = ""          # path alla cartella grounding (se applicabile)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "job_id": self.job_id,
@@ -162,6 +263,8 @@ class JobState:
             "output_path": self.output_path,
             "logs": self.logs,
             "created_at": self.created_at,
+            "grounding_enabled": self.grounding_enabled,
+            "output_dir": self.output_dir,
             "page_results": {
                 str(k): v.to_dict() for k, v in self.page_results.items()
             },
@@ -239,6 +342,24 @@ def _send_page_to_vlm(image_bytes: bytes, model: str, url: str) -> str:
     return response.choices[0].message.content
 
 
+def _send_page_to_vlm_grounding(image_bytes: bytes, model: str, url: str) -> str:
+    """Send page to VLM with grounding prompt (detects charts/figures + bounding boxes)."""
+    client = _get_client(url)
+    b64 = base64.b64encode(image_bytes).decode("utf-8")
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": GROUNDING_SYSTEM_PROMPT},
+            {"role": "user", "content": [
+                {"type": "text", "text": GROUNDING_USER_PROMPT},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+            ]},
+        ],
+        max_tokens=GROUNDING_MAX_TOKENS,
+    )
+    return response.choices[0].message.content
+
+
 def _is_text_page(page: fitz.Page) -> bool:
     MIN_TEXT_CHARS = 20
     raw = page.get_text("text")
@@ -253,10 +374,12 @@ def _process_single_page(
     url: str,
     force_vlm: bool,
     job_id: str,
+    grounding: bool = False,
 ) -> None:
     """
     Process a single PDF page and store the result in page_results.
     page_idx is 0-based.
+    When grounding=True, uses the grounding prompt and parses bounding boxes.
     """
     page_num = page_idx + 1
     _ensure_page_result(job_id, page_num)
@@ -265,7 +388,31 @@ def _process_single_page(
     page = doc[page_idx]
 
     try:
-        if not force_vlm and _is_text_page(page):
+        if grounding:
+            # ── Grounding mode ──────────────────────────────────────
+            _add_log(job_id, f"[{page_num}/{doc.page_count}] Converting page {page_num} to image (grounding)...")
+            pix = page.get_pixmap(dpi=dpi)
+            page_bytes = pix.tobytes("png")
+
+            _add_log(job_id, f"[{page_num}/{doc.page_count}] Sending page {page_num} to VLM ({model}, grounding)...")
+            result = _send_page_to_vlm_grounding(page_bytes, model, url)
+
+            markdown, img_metadata = parse_grounding_response(result)
+
+            _update_page_result(
+                job_id, page_num,
+                markdown=markdown, model=model,
+                method="vlm_grounding", status="done",
+                grounding_images=img_metadata,
+                grounding_enabled=True,
+                page_image_bytes=page_bytes,
+            )
+            if img_metadata:
+                _add_log(job_id, f"[{page_num}/{doc.page_count}] Grounding: {len(img_metadata)} image(s) detected")
+            else:
+                _add_log(job_id, f"[{page_num}/{doc.page_count}] Grounding: no visual elements (text-only)")
+
+        elif not force_vlm and _is_text_page(page):
             text = page.get_text("text").strip()
             _update_page_result(
                 job_id, page_num,
@@ -331,6 +478,205 @@ def _write_merged_output(job_id: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Grounding: parsing, cropping, output
+# ---------------------------------------------------------------------------
+
+_BOX_ENTRY_RE = re.compile(
+    r"<box>\s*\(?\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)?\s*</box>"
+    r"\s*\|\s*IMG_(\d+)\s*\|\s*(.+)"
+)
+
+
+def parse_grounding_response(response_text: str) -> tuple[str, list[dict]]:
+    """
+    Parse the structured grounding response from the VLM.
+
+    Returns (markdown_text, list_of_image_metadata).
+    On any parsing failure, falls back to (response_text, []) — i.e. classic OCR.
+    """
+    # 1. Extract TEXT section
+    text_match = re.search(
+        r"===TEXT_START===\s*\n?(.*?)\n?=+=+TEXT_END=+=+",
+        response_text, re.DOTALL,
+    )
+    if not text_match:
+        # No delimiters → fallback to classic OCR
+        return (response_text, [])
+
+    markdown = text_match.group(1).strip()
+
+    # 2. Extract BOXES section
+    boxes_match = re.search(
+        r"===BOXES_START===\s*\n?(.*?)\n?=+=+BOXES_END=+=+",
+        response_text, re.DOTALL,
+    )
+    if not boxes_match:
+        # No boxes section → text only, no images
+        return (markdown, [])
+
+    boxes_text = boxes_match.group(1).strip()
+    if not boxes_text:
+        return (markdown, [])
+
+    # 3. Parse box entries
+    entries: list[dict] = []
+    for m in _BOX_ENTRY_RE.finditer(boxes_text):
+        x1, y1, x2, y2, img_num, desc = m.groups()
+        x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+
+        # Validate coordinates in range 0-1000
+        if not all(0 <= c <= 1000 for c in (x1, y1, x2, y2)):
+            print(f"[Grounding] Warning: coords out of range IMG_{img_num}, skipping")
+            continue
+
+        img_id = f"IMG_{img_num}"
+        entries.append({
+            "id": img_id,
+            "description": desc.strip(),
+            "bbox": [x1, y1, x2, y2],
+            "image_filename": f"IMG_{img_num}.png",
+        })
+
+    # 4. Safety: max 5 boxes per page
+    if len(entries) > 5:
+        print(f"[Grounding] Warning: {len(entries)} boxes, truncating to 5")
+        entries = entries[:5]
+
+    # 5. Cross-reference: every placeholder in markdown should have a box
+    placeholder_nums = {m.group(1) for m in re.finditer(r"IMG_(\d+)", markdown)}
+    box_nums = {e["id"] for e in entries}
+    unmatched = placeholder_nums - {e["id"].split("_")[1] for e in entries}
+    if unmatched:
+        print(f"[Grounding] Warning: placeholders without box: {unmatched}")
+
+    return (markdown, entries)
+
+
+def crop_page_image(page_bytes: bytes, bbox: tuple, dpi: int) -> bytes:
+    """
+    Crop a page PNG using normalized bbox coordinates (0-1000).
+
+    Returns PNG bytes of the cropped region.
+    On error, returns the full page as fallback.
+    """
+    try:
+        img = Image.open(io.BytesIO(page_bytes))
+        W, H = img.size
+
+        x1, y1, x2, y2 = bbox
+
+        # Map normalized coords to pixel coords
+        px1 = int(x1 / 1000 * W)
+        py1 = int(y1 / 1000 * H)
+        px2 = int(x2 / 1000 * W)
+        py2 = int(y2 / 1000 * H)
+
+        # Apply 5% padding for safety margin
+        pad_x = int((px2 - px1) * 0.05)
+        pad_y = int((py2 - py1) * 0.05)
+        px1 = max(0, px1 - pad_x)
+        py1 = max(0, py1 - pad_y)
+        px2 = min(W, px2 + pad_x)
+        py2 = min(H, py2 + pad_y)
+
+        # Clamp to image bounds
+        px1, py1 = max(0, px1), max(0, py1)
+        px2, py2 = min(W, px2), min(H, py2)
+
+        cropped = img.crop((px1, py1, px2, py2))
+        buf = io.BytesIO()
+        cropped.save(buf, format="PNG")
+        return buf.getvalue()
+
+    except Exception as exc:
+        print(f"[Grounding] Crop error: {exc} — returning full page as fallback")
+        return page_bytes
+
+
+def _write_grounding_output(job_id: str) -> str:
+    """
+    Write grounding output: crop images from bounding boxes and assemble
+    extracted.md with placeholders. Returns path to the output directory.
+    """
+    with jobs_lock:
+        job = jobs.get(job_id)
+    if not job:
+        return ""
+
+    output_base = BASE_DIR / "outputs"
+    stem = Path(job.filename).stem
+    stem = "".join(c for c in stem if c not in ("/", "\\", ":", "*", "?", '"', "<", ">", "|"))
+    out_dir = output_base / f"{stem}_grounding"
+    images_dir = out_dir / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    # Collect all grounding images and crop them
+    # Use global counter to avoid IMG_N conflicts across pages
+    global_counter = 1
+    img_rename_map: dict[str, str] = {}  # old IMG_N → new IMG_N.png
+    all_entries: list[dict] = []
+
+    for pn in sorted(job.page_results.keys()):
+        pr = job.page_results[pn]
+        if not pr.grounding_enabled or not pr.grounding_images:
+            continue
+
+        for entry in pr.grounding_images:
+            old_id = entry["id"]  # e.g. "IMG_1" (from VLM, per-page)
+            bbox = tuple(entry["bbox"])
+
+            # Global unique filename
+            new_filename = f"IMG_{global_counter}.png"
+            global_counter += 1
+
+            # Crop from stored page image bytes
+            if pr.page_image_bytes:
+                cropped_bytes = crop_page_image(pr.page_image_bytes, bbox, 150)
+            else:
+                cropped_bytes = pr.page_image_bytes  # fallback: empty
+
+            # Save cropped image
+            out_path = images_dir / new_filename
+            with open(out_path, "wb") as fh:
+                fh.write(cropped_bytes)
+
+            img_rename_map[old_id] = new_filename
+            all_entries.append({"id": old_id, "image_filename": new_filename})
+
+    # Assemble markdown with image paths
+    md_parts: list[str] = []
+    for pn in sorted(job.page_results.keys()):
+        pr = job.page_results[pn]
+        if pr.markdown:
+            md_parts.append(pr.markdown)
+        elif pr.status == "error":
+            md_parts.append(f"\n\n<!-- Page {pn}: error — {pr.error_msg} -->\n\n")
+
+    markdown_text = "\n\n".join(md_parts)
+
+    # Replace IMG_N references with images/IMG_N.png paths
+    # The VLM outputs ![desc](IMG_N) — we need ![desc](images/IMG_N.png)
+    for entry in all_entries:
+        img_id = entry["id"]  # e.g. "IMG_1"
+        img_filename = entry["image_filename"]  # e.g. "IMG_1.png"
+        # Replace ](IMG_N) with ](images/IMG_N.png)
+        markdown_text = markdown_text.replace(
+            f"]({img_id})",
+            f"](images/{img_filename})",
+        )
+
+    # Write extracted.md
+    md_path = out_dir / "extracted.md"
+    with open(md_path, "w", encoding="utf-8") as fh:
+        fh.write(markdown_text)
+
+    with jobs_lock:
+        job.output_dir = str(out_dir)
+
+    return str(out_dir)
+
+
+# ---------------------------------------------------------------------------
 # Job Workers
 # ---------------------------------------------------------------------------
 
@@ -373,6 +719,7 @@ def process_pdf(
     job_id: str,
     filename: str,
     page_spec: str,
+    grounding: bool = False,
 ):
     """
     Process a PDF — hybrid text extraction + VLM for scanned pages.
@@ -393,6 +740,7 @@ def process_pdf(
         with jobs_lock:
             if job_id in jobs:
                 jobs[job_id].file_bytes = file_bytes
+                jobs[job_id].grounding_enabled = grounding
 
         _progress(job_id, 0, pages)
         _add_log(job_id, f"[Start] Processing PDF ({pages} page(s))...")
@@ -422,7 +770,7 @@ def process_pdf(
                 _progress(job_id, processed, pages)
                 continue
 
-            _process_single_page(doc, i, dpi, model, url, force_vlm, job_id)
+            _process_single_page(doc, i, dpi, model, url, force_vlm, job_id, grounding)
 
             with jobs_lock:
                 pr = jobs[job_id].page_results.get(pn)
@@ -435,12 +783,18 @@ def process_pdf(
             _progress(job_id, processed, pages)
 
         # Merge and write output
-        output_path = _write_merged_output(job_id)
-
-        _add_log(job_id, (
-            f"[Info] Done — {text_pages} page(s) via text extraction, "
-            f"{vlm_pages} page(s) via VLM."
-        ))
+        if grounding:
+            output_path = _write_grounding_output(job_id)
+            _add_log(job_id, (
+                f"[Info] Done (grounding) — {text_pages} page(s) via text extraction, "
+                f"{vlm_pages} page(s) via VLM."
+            ))
+        else:
+            output_path = _write_merged_output(job_id)
+            _add_log(job_id, (
+                f"[Info] Done — {text_pages} page(s) via text extraction, "
+                f"{vlm_pages} page(s) via VLM."
+            ))
         _add_log(job_id, f"[Success] File saved to {output_path}")
         _set_status(job_id, "done", output_path)
         return output_path
@@ -464,6 +818,7 @@ def run_ocr_job(
     force_vlm: bool,
     filename: str,
     page_spec: str,
+    grounding: bool = False,
 ):
     """Top-level worker: dispatch to image or PDF handler."""
     _set_status(job_id, "processing")
@@ -474,7 +829,7 @@ def run_ocr_job(
             _set_status(job_id, "done", output)
             _progress(job_id, 1, 1)
         elif ext in PDF_EXTENSIONS:
-            output = process_pdf(file_bytes, dpi, model, url, force_vlm, job_id, filename, page_spec)
+            output = process_pdf(file_bytes, dpi, model, url, force_vlm, job_id, filename, page_spec, grounding)
         else:
             _set_status(job_id, "error", f"Unsupported file type: {ext}")
     except Exception as exc:
@@ -641,6 +996,7 @@ async def start_ocr(
     dpi: int = Form(150),
     force_vlm: bool = Form(False),
     page_spec: str = Form("all"),
+    grounding: bool = Form(False),
     background_tasks: BackgroundTasks = BackgroundTasks(),
 ):
     if not model:
@@ -673,6 +1029,7 @@ async def start_ocr(
         force_vlm=force_vlm,
         filename=file.filename or "unknown",
         page_spec=page_spec,
+        grounding=grounding,
     )
 
     return {"job_id": job_id}
@@ -810,8 +1167,9 @@ async def stream_status(job_id: str):
 @app.get("/api/download/{job_id}")
 async def download_result(job_id: str):
     """
-    Download the OCR output.  The merged markdown is regenerated on-the-fly
-    from all per-page results so that any reprocessed pages are included.
+    Download the OCR output.
+    - Grounding jobs: returns a ZIP containing extracted.md + images/
+    - Classic jobs: returns the .md file directly
     """
     with jobs_lock:
         job = jobs.get(job_id)
@@ -822,7 +1180,28 @@ async def download_result(job_id: str):
     if job.status == "error":
         raise HTTPException(status_code=422, detail=f"Job failed: {job.message}")
 
-    # Regenerate merged output from current page results
+    if job.grounding_enabled and job.output_dir and os.path.isdir(job.output_dir):
+        # Return ZIP of the grounding output directory
+        stem = Path(job.filename).stem
+        stem = "".join(c for c in stem if c not in ("/", "\\", ":", "*", "?", '"', "<", ">", "|"))
+        zip_filename = f"{stem}_grounding.zip"
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            out_dir = Path(job.output_dir)
+            for fpath in out_dir.rglob("*"):
+                if fpath.is_file():
+                    arcname = str(fpath.relative_to(out_dir))
+                    zf.write(fpath, arcname)
+        buf.seek(0)
+
+        return StreamingResponse(
+            buf,
+            media_type="application/zip",
+            headers={"Content-Disposition": f"attachment; filename={zip_filename}"},
+        )
+
+    # Classic: regenerate merged output from current page results
     output_path = _write_merged_output(job_id)
     if not output_path or not os.path.isfile(output_path):
         raise HTTPException(status_code=404, detail="No output file available.")
@@ -833,6 +1212,71 @@ async def download_result(job_id: str):
         filename=filename,
         media_type="text/markdown",
     )
+
+
+# ── Download single grounding image ──────────────────────────────────────
+
+@app.get("/api/download-image/{job_id}/{img_filename}")
+async def download_grounding_image(
+    job_id: str,
+    img_filename: str,
+    page_num: int = 0,  # 0 = auto-search; N = specific page (1-based)
+):
+    """
+    Return a single cropped image from a grounding job.
+    Used by the frontend to render images inline in the markdown preview.
+
+    When page_num > 0, crops directly from that page (avoids IMG_N collisions
+    across pages — the VLM always starts numbering from IMG_1 per page).
+    """
+    with jobs_lock:
+        job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+
+    if not job.grounding_enabled:
+        raise HTTPException(status_code=400, detail="Grounding not enabled for this job.")
+
+    # ── Case 1: specific page requested → crop on-the-fly ─────────
+    if page_num > 0:
+        pr = job.page_results.get(page_num)
+        if pr and pr.grounding_images and pr.page_image_bytes:
+            for entry in pr.grounding_images:
+                if entry["image_filename"] == img_filename:
+                    cropped = crop_page_image(
+                        pr.page_image_bytes, tuple(entry["bbox"]), 150,
+                    )
+                    return StreamingResponse(
+                        io.BytesIO(cropped),
+                        media_type="image/png",
+                        headers={"Content-Disposition": f"inline; filename={img_filename}"},
+                    )
+
+    # ── Case 2: look in output directory (post-job) ──────────────
+    if job.output_dir and os.path.isdir(job.output_dir):
+        img_path = Path(job.output_dir) / "images" / img_filename
+        if img_path.is_file():
+            return FileResponse(
+                path=str(img_path),
+                media_type="image/png",
+                filename=img_filename,
+            )
+
+    # ── Case 3: search all pages (fallback) ──────────────────────
+    for pn, pr in job.page_results.items():
+        if pr.grounding_images and pr.page_image_bytes:
+            for entry in pr.grounding_images:
+                if entry["image_filename"] == img_filename:
+                    cropped = crop_page_image(
+                        pr.page_image_bytes, tuple(entry["bbox"]), 150,
+                    )
+                    return StreamingResponse(
+                        io.BytesIO(cropped),
+                        media_type="image/png",
+                        headers={"Content-Disposition": f"inline; filename={img_filename}"},
+                    )
+
+    raise HTTPException(status_code=404, detail=f"Image '{img_filename}' not found.")
 
 
 # ---------------------------------------------------------------------------

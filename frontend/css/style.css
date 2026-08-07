@@ -192,6 +192,60 @@ header h1 {
   height: 14px;
 }
 
+/* ── Help text (grounding toggle description) ─────────────────── */
+.help-text {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+  margin-bottom: 2px;
+  line-height: 1.3;
+  padding-left: 22px;
+}
+
+/* ── Grounding badge ──────────────────────────────────────────── */
+.grounding-badge {
+  font-size: 0.65rem;
+  background: rgba(233, 69, 96, 0.15);
+  color: var(--accent);
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+/* ── Image entry (in page results list) ───────────────────────── */
+.image-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px 4px 36px;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.image-entry:hover {
+  color: var(--text-primary);
+}
+
+/* ── Image thumbnail ──────────────────────────────────────────── */
+.image-thumbnail {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+  transition: transform 0.2s, border-color 0.2s;
+}
+
+.image-thumbnail:hover {
+  transform: scale(2.5);
+  border-color: var(--accent);
+  z-index: 10;
+  position: relative;
+}
+
 /* ── Page Selection ─────────────────────────────────────────────── */
 .page-selection-field {
   grid-column: 1 / -1;

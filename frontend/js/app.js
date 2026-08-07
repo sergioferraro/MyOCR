@@ -11,6 +11,7 @@ const modelSelect       = $('#modelSelect');
 const btnRefreshModels  = $('#btnRefreshModels');
 const dpiSelect         = $('#dpiSelect');
 const forceVlmCheckbox  = $('#forceVlm');
+const groundingToggle   = $('#groundingToggle');
 const pageRangeInput    = $('#pageRangeInput');
 
 const dropZone          = $('#dropZone');
@@ -89,6 +90,8 @@ const btnCloseRename    = $('#btnCloseRename');
 let selectedFile = null;
 let currentJobId = null;
 let eventSource  = null;
+let groundingEnabled = false;       // toggle grounding per job corrente
+let groundingImageCache = {};       // { "IMG_1.png": dataUri } — cache immagini caricate
 
 // Preview state
 let previewThumbnails = [];    // data-URI thumbnails (initial batch)
@@ -622,7 +625,7 @@ function showPreviewPage(silent = false) {
 }
 
 // ── Sync: Preview → Sidebar + Markdown ─────────────────────────
-function syncFromPreview() {
+async function syncFromPreview() {
   const pageNum1based = previewPage + 1;
   // Highlight matching page in sidebar
   const items = pageResultsList.querySelectorAll('.page-result-item');
@@ -639,7 +642,11 @@ function syncFromPreview() {
   const pr = pageResults.find(p => p.page_num === pageNum1based);
   if (pr && !isViewingAll) {
     selectedPageNum = pageNum1based;
-    renderMarkdown(pr.markdown || '<!-- pagina non processata -->');
+    let md = pr.markdown || '<!-- pagina non processata -->';
+    if (groundingEnabled && currentJobId) {
+      md = await resolveGroundingImages(md, currentJobId);
+    }
+    renderMarkdown(md);
   }
 }
 
@@ -688,6 +695,7 @@ btnStart.addEventListener('click', async () => {
   const model = modelSelect.value;
   const dpi = parseInt(dpiSelect.value, 10);
   const forceVlm = forceVlmCheckbox.checked;
+  const grounding = groundingToggle.checked;
   const pageSpec = getPageSpec();
 
   if (!model) { alert('Select a model.'); return; }
@@ -711,6 +719,7 @@ btnStart.addEventListener('click', async () => {
   formData.append('url', url);
   formData.append('dpi', dpi.toString());
   formData.append('force_vlm', forceVlm ? 'true' : 'false');
+  formData.append('grounding', grounding ? 'true' : 'false');
   formData.append('page_spec', pageSpec);
 
   try {
@@ -815,7 +824,10 @@ async function onJobDone(data) {
   btnStart.textContent = '🚀 Start OCR';
   setProgress(100, 'Completed!');
 
-  setResultStatus(`✅ ${data.processed_pages} pages processed`, 'success');
+  // Capture grounding state from server
+  groundingEnabled = !!data.grounding_enabled;
+
+  setResultStatus(`✅ ${data.processed_pages} pages processed${groundingEnabled ? ' (grounding)' : ''}`, 'success');
 
   // Fetch per-page results
   await fetchPageResults();
@@ -861,7 +873,7 @@ async function fetchPageResults() {
 // ── Render Per-Page Results List ─────────────────────────────────
 function renderPageResultsList() {
   // First, clear all existing page items but keep the "View All" button
-  const existingItems = pageResultsList.querySelectorAll('.page-result-item:not(.view-all-btn)');
+  const existingItems = pageResultsList.querySelectorAll('.page-result-item:not(.view-all-btn), .image-entry');
   existingItems.forEach(item => item.remove());
 
   // "View All" button - create if not exists
@@ -900,15 +912,21 @@ function renderPageResultsList() {
       item.className = 'page-result-item' + (isActive ? ' active' : '');
     }
 
-    const methodLabel = pr.method === 'vlm' ? 'VLM' : pr.method === 'text_extract' ? 'TXT' : pr.method === 'skipped' ? '—' : '?';
+    const methodLabel = pr.method === 'vlm_grounding' ? 'VLM' : pr.method === 'vlm' ? 'VLM' : pr.method === 'text_extract' ? 'TXT' : pr.method === 'skipped' ? '—' : '?';
     const modelLabel = pr.model && pr.model !== '(text-extract)' ? pr.model.substring(0, 30) : '';
+    const groundingBadge = pr.grounding_enabled ? '<span class="grounding-badge">🖼️ Grounding</span>' : '';
 
     item.innerHTML = `
       <span class="page-num">${pr.page_num}</span>
       <span class="page-meta">${methodLabel}${modelLabel ? ' · ' + modelLabel : ''}</span>
+      ${groundingBadge}
       <span class="page-status-dot ${pr.status}"></span>
       ${pr.status === 'done' ? `<button class="btn-reprocess" data-page="${pr.page_num}">🔄</button>` : ''}
     `;
+
+    // Remove any existing image entries below this page item
+    const existingImgEntries = pageResultsList.querySelectorAll(`.image-entry[data-parent-page="${pr.page_num}"]`);
+    existingImgEntries.forEach(e => e.remove());
 
     // Click on the row → sync preview + show that page's markdown
     item.addEventListener('click', async (e) => {
@@ -918,7 +936,13 @@ function renderPageResultsList() {
       // Update sidebar list first, then sync preview
       renderPageResultsList();
       syncFromSidebar(pr.page_num);
-      renderMarkdown(pr.markdown || '<!-- page not processed -->');
+
+      // Resolve grounding images in single-page markdown
+      let md = pr.markdown || '<!-- page not processed -->';
+      if (groundingEnabled && currentJobId) {
+        md = await resolveGroundingImages(md, currentJobId);
+      }
+      renderMarkdown(md);
     });
 
     // Reprocess button
@@ -931,26 +955,143 @@ function renderPageResultsList() {
     }
 
     pageResultsList.appendChild(item);
+
+    // Grounding: add image entries with thumbnails below the page item
+    if (pr.grounding_images && pr.grounding_images.length > 0 && currentJobId) {
+      pr.grounding_images.forEach(entry => {
+        const imgEntry = document.createElement('div');
+        imgEntry.className = 'image-entry';
+        imgEntry.setAttribute('data-parent-page', pr.page_num);
+
+        const imgFilename = entry.image_filename || `${entry.id}.png`;
+        const desc = entry.description || 'image';
+
+        imgEntry.innerHTML = `
+          <span style="flex-shrink:0;">└─</span>
+          <img class="image-thumbnail" src="/api/download-image/${currentJobId}/${imgFilename}?page_num=${pr.page_num}" alt="${desc}" onerror="this.style.display='none'">
+          <span>${entry.id}: ${desc}</span>
+        `;
+
+        // Click on image entry → show that page's markdown
+        imgEntry.addEventListener('click', async () => {
+          isViewingAll = false;
+          selectedPageNum = pr.page_num;
+          renderPageResultsList();
+          syncFromSidebar(pr.page_num);
+          let md = pr.markdown || '<!-- page not processed -->';
+          if (groundingEnabled && currentJobId) {
+            md = await resolveGroundingImages(md, currentJobId);
+          }
+          renderMarkdown(md);
+        });
+
+        pageResultsList.appendChild(imgEntry);
+      });
+    }
+  });
+}
+
+// ── Resolve grounding image paths to data URIs ──────────────────
+// The VLM outputs ![desc](IMG_N) — no prefix, no .png extension.
+// We need to fetch the actual cropped image and replace the placeholder
+// with a data URI so zero-md renders it inline.
+async function resolveGroundingImages(markdown, jobId) {
+  if (!groundingEnabled) return markdown;
+
+  // Match both forms: ![desc](IMG_N) and ![desc](images/IMG_N.png)
+  const matches = markdown.match(/!\[([^\]]+)\]\((images\/)?IMG_(\d+)(\.png)?\)/g) || [];
+  const imgRefs = new Set();  // "IMG_N" references
+
+  for (const match of matches) {
+    const m = match.match(/IMG_(\d+)/);
+    if (m) imgRefs.add(`IMG_${m[1]}`);
+  }
+
+  if (imgRefs.size === 0) return markdown;
+
+  // Build a map IMG_N → page_num from pageResults
+  const imgToPage = {};
+  for (const pr of pageResults) {
+    if (pr.grounding_images) {
+      for (const entry of pr.grounding_images) {
+        if (entry.id) imgToPage[entry.id] = pr.page_num;
+      }
+    }
+  }
+
+  // Load images: for each IMG_N, find the page that owns it, then crop on-the-fly
+  for (const imgRef of imgRefs) {
+    const cacheKey = `${jobId}_${imgRef}`;
+    if (groundingImageCache[cacheKey]) continue;
+
+    // Find which page has this image
+    const pageNum = imgToPage[imgRef];
+    if (!pageNum) {
+      console.warn(`Grounding: no page found for ${imgRef}`);
+      continue;
+    }
+
+    // Fetch cropped image from the API (it crops on-the-fly from stored page bytes)
+    const imgFilename = `${imgRef}.png`;
+    try {
+      const res = await fetch(`/api/download-image/${jobId}/${imgFilename}?page_num=${pageNum}`);
+      if (res.ok) {
+        const blob = await res.blob();
+        const dataUri = await blobToDataUri(blob);
+        groundingImageCache[cacheKey] = dataUri;
+      }
+    } catch (err) {
+      console.warn(`Grounding: failed to load ${imgFilename}`, err);
+    }
+  }
+
+  // Replace all placeholder references with data URIs
+  // Handle both ![desc](IMG_N) and ![desc](images/IMG_N.png)
+  markdown = markdown.replace(
+    /(!\[[^\]]*\])\((images\/)?IMG_(\d+)(\.png)?\)/g,
+    (full, altPart, prefix, num, ext) => {
+      const cacheKey = `${jobId}_IMG_${num}`;
+      const dataUri = groundingImageCache[cacheKey];
+      if (dataUri) {
+        return `${altPart}(${dataUri})`;
+      }
+      return full; // keep original if fetch failed
+    },
+  );
+
+  return markdown;
+}
+
+function blobToDataUri(blob) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result);
+    reader.readAsDataURL(blob);
   });
 }
 
 // ── Render Merged Markdown ──────────────────────────────────────
 async function renderMergedMarkdown() {
   // Build merged markdown from pageResults (respects post-processing)
+  let md;
   if (pageResults && pageResults.length > 0) {
-    renderMarkdown(buildMergedMarkdown());
-    return;
-  }
-  
-  // Fallback: fetch from server
-  try {
-    const res = await fetch(`/api/download/${currentJobId}`);
-    if (res.ok) {
-      const text = await res.text();
-      renderMarkdown(text);
+    md = buildMergedMarkdown();
+  } else {
+    // Fallback: fetch from server
+    try {
+      const res = await fetch(`/api/download/${currentJobId}`);
+      if (res.ok) {
+        md = await res.text();
+      }
+    } catch (err) {
+      console.error('Failed to fetch merged result:', err);
     }
-  } catch (err) {
-    console.error('Failed to fetch merged result:', err);
+  }
+
+  if (md) {
+    // Resolve grounding image paths to data URIs
+    md = await resolveGroundingImages(md, currentJobId);
+    renderMarkdown(md);
   }
 }
 
@@ -1023,33 +1164,50 @@ btnDownload.addEventListener('click', async () => {
   if (!currentJobId) return;
 
   try {
-    // Use processed markdown from pageResults if available
-    let content;
-    if (pageResults && pageResults.length > 0) {
-      content = buildMergedMarkdown();
-    } else {
-      // Fallback: fetch from server
+    if (groundingEnabled) {
+      // Download ZIP (grounding output: .md + images/)
       const res = await fetch(`/api/download/${currentJobId}`);
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
         alert(`Download failed: ${err.detail || 'Unknown error'}`);
         return;
       }
-      content = await res.text();
-    }
-    
-    const blob = new Blob([content], { type: 'text/markdown' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      const stem = selectedFile ? selectedFile.name.replace(/\.[^.]+$/, '') : `ocr_${currentJobId}`;
+      a.download = `${stem}_grounding.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(a.href);
+    } else {
+      // Download .md (classic)
+      let content;
+      if (pageResults && pageResults.length > 0) {
+        content = buildMergedMarkdown();
+      } else {
+        const res = await fetch(`/api/download/${currentJobId}`);
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+          alert(`Download failed: ${err.detail || 'Unknown error'}`);
+          return;
+        }
+        content = await res.text();
+      }
 
-    // Derive filename from the original file name
-    const stem = selectedFile ? selectedFile.name.replace(/\.[^.]+$/, '') : `ocr_${currentJobId}`;
-    a.download = `${stem}.md`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+      const blob = new Blob([content], { type: 'text/markdown' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+
+      const stem = selectedFile ? selectedFile.name.replace(/\.[^.]+$/, '') : `ocr_${currentJobId}`;
+      a.download = `${stem}.md`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
   } catch (err) {
     alert(`Download error: ${err.message}`);
   }
@@ -1147,6 +1305,8 @@ btnNewOcr.addEventListener('click', () => {
   pageResults = [];
   selectedPageNum = null;
   isViewingAll = true;
+  groundingEnabled = false;
+  groundingImageCache = {};
   hide(fileInfo);
   hide(btnStart);
   hide(progressPanel);
