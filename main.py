@@ -138,8 +138,10 @@ GROUNDING_MAX_TOKENS = 32000
 # ── Sampling params per risposte deterministiche ────────────────
 # temperature=0 → massimo determinismo (nessuna casualità)
 # top_p=0.1 → nucleus sampling molto stretto
+# seed fisso → stessa risposta per lo stesso input (riproducibilità)
 OCR_TEMPERATURE = 0.0
 OCR_TOP_P = 0.1
+OCR_SEED = 42
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -346,6 +348,7 @@ def _send_page_to_vlm(image_bytes: bytes, model: str, url: str) -> str:
         max_tokens=8192,
         temperature=OCR_TEMPERATURE,
         top_p=OCR_TOP_P,
+        seed=OCR_SEED,
     )
     return response.choices[0].message.content
 
@@ -366,6 +369,7 @@ def _send_page_to_vlm_grounding(image_bytes: bytes, model: str, url: str) -> str
         max_tokens=GROUNDING_MAX_TOKENS,
         temperature=OCR_TEMPERATURE,
         top_p=OCR_TOP_P,
+        seed=OCR_SEED,
     )
     return response.choices[0].message.content
 
