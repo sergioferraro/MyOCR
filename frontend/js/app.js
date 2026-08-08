@@ -992,92 +992,100 @@ function renderPageResultsList() {
 }
 
 // ── Resolve grounding image paths to data URIs ──────────────────
-// The VLM outputs ![desc](IMG_N) — no prefix, no .png extension.
-// We need to fetch the actual cropped image and replace the placeholder
-// with a data URI so zero-md renders it inline.
+// The in-memory per-page markdown has raw ![desc](IMG_N) placeholders.
+// The file output rewrites them to ![desc](images/pN_IMG_N.png).
+// This function handles BOTH formats and replaces with data URIs
+// so zero-md can render images inline.
 async function resolveGroundingImages(markdown, jobId) {
   if (!groundingEnabled) return markdown;
 
-  // Build a per-page ordered list of image entries.
-  // Since the VLM re-numbers from IMG_1 on every page, we need to know
-  // which page each IMG_N in the markdown belongs to.
-  // Strategy: build a list of {imgId, pageNum} in page order, then
-  // for each IMG_N occurrence in the markdown, pick the next entry
-  // from that imgId's queue.
-  const imgQueues = {};  // imgId -> [{pageNum, imgIndex}, ...]
+  // ── Phase 1: resolve paths already rewritten by backend
+  //          e.g. ![desc](images/p1_IMG_1.png)
+  const resolvedRe = /(!\[[^\]]*\])\(images\/(p\d+_IMG_\d+\.png)\)/g;
+  const resolvedMatches = [...markdown.matchAll(resolvedRe)];
+
+  if (resolvedMatches.length > 0) {
+    const fetchPromises = [];
+    for (const m of resolvedMatches) {
+      const path = m[2]; // e.g. "p1_IMG_1.png"
+      if (groundingImageCache[path]) continue;
+
+      const pageMatch = path.match(/^p(\d+)/);
+      const pageNum = pageMatch ? parseInt(pageMatch[1], 10) : 0;
+
+      fetchPromises.push(
+        fetch(`/api/download-image/${jobId}/${encodeURIComponent(path)}?page_num=${pageNum}`)
+          .then(res => res.ok ? res.blob() : null)
+          .then(blob => {
+            if (blob) return blobToDataUri(blob).then(uri => { groundingImageCache[path] = uri; });
+          })
+          .catch(() => {}),
+      );
+    }
+    if (fetchPromises.length > 0) await Promise.all(fetchPromises);
+
+    markdown = markdown.replace(resolvedRe, (full, altPart, path) => {
+      const uri = groundingImageCache[path];
+      return uri ? `${altPart}(${uri})` : full;
+    });
+  }
+
+  // ── Phase 2: resolve raw ![desc](IMG_N) placeholders
+  //          The VLM re-numbers from IMG_1 on every page, so IMG_1 appears
+  //          on multiple pages. We build per-ID queues from pageResults
+  //          (in page order) and consume them sequentially.
+  const rawRe = /(!\[[^\]]*\])\(IMG_(\d+)\)/g;
+  const rawMatches = [...markdown.matchAll(rawRe)];
+
+  if (rawMatches.length === 0) return markdown;
+
+  // Build queues: IMG_N → [{pageNum, filename}, ...]
+  const queues = {};
   for (const pr of pageResults) {
-    if (pr.grounding_images) {
-      for (let i = 0; i < pr.grounding_images.length; i++) {
-        const entry = pr.grounding_images[i];
-        if (!entry.id) continue;
-        if (!imgQueues[entry.id]) imgQueues[entry.id] = [];
-        imgQueues[entry.id].push({ pageNum: pr.page_num, imgIndex: i });
-      }
+    if (!pr.grounding_images) continue;
+    for (const entry of pr.grounding_images) {
+      const id = entry.id; // "IMG_1"
+      if (!queues[id]) queues[id] = [];
+      queues[id].push({
+        pageNum: pr.page_num,
+        filename: entry.image_filename, // "p1_IMG_1.png"
+      });
     }
   }
 
-  // Check if there's anything to resolve
-  const hasImages = Object.keys(imgQueues).length > 0;
-  if (!hasImages) return markdown;
-
-  // Pre-fetch all unique (page_num, imgIndex) combos
+  // Pre-fetch all needed images
   const fetchPromises = [];
-  const seenKeys = new Set();
-  for (const entries of Object.values(imgQueues)) {
-    for (const e of entries) {
-      const key = `${jobId}_${e.pageNum}_${e.imgIndex}`;
-      if (seenKeys.has(key)) continue;
-      seenKeys.add(key);
-
-      // Find the actual image filename from pageResults
-      const pr = pageResults.find(p => p.page_num === e.pageNum);
-      if (!pr || !pr.grounding_images[e.imgIndex]) continue;
-      const imgFilename = pr.grounding_images[e.imgIndex].image_filename || `${pr.grounding_images[e.imgIndex].id}.png`;
-
-      if (!groundingImageCache[key]) {
-        fetchPromises.push(
-          fetch(`/api/download-image/${jobId}/${imgFilename}?page_num=${e.pageNum}`)
-            .then(res => res.ok ? res.blob() : null)
-            .then(blob => {
-              if (blob) {
-                return blobToDataUri(blob).then(uri => {
-                  groundingImageCache[key] = uri;
-                });
-              }
-            })
-            .catch(() => {}),
-        );
-      }
+  for (const id in queues) {
+    for (const q of queues[id]) {
+      const key = q.filename;
+      if (groundingImageCache[key]) continue;
+      fetchPromises.push(
+        fetch(`/api/download-image/${jobId}/${encodeURIComponent(q.filename)}?page_num=${q.pageNum}`)
+          .then(res => res.ok ? res.blob() : null)
+          .then(blob => {
+            if (blob) return blobToDataUri(blob).then(uri => { groundingImageCache[key] = uri; });
+          })
+          .catch(() => {}),
+      );
     }
   }
+  if (fetchPromises.length > 0) await Promise.all(fetchPromises);
 
-  if (fetchPromises.length > 0) {
-    await Promise.all(fetchPromises);
-  }
+  // Replace raw placeholders — consume queues in order
+  const counters = {};
+  markdown = markdown.replace(rawRe, (full, altPart, num) => {
+    const id = `IMG_${num}`;
+    const queue = queues[id];
+    if (!queue) return full;
 
-  // Replace placeholders — track occurrence count per imgId
-  const occCount = {};  // imgId -> how many times seen so far
-  markdown = markdown.replace(
-    /(!\[[^\]]*\])\((images\/)?IMG_(\d+)(\.png)?\)/g,
-    (full, altPart, prefix, num, ext) => {
-      const imgId = `IMG_${num}`;
-      const queue = imgQueues[imgId];
-      if (!queue) return full;
+    const idx = counters[id] || 0;
+    counters[id] = idx + 1;
+    if (idx >= queue.length) return full;
 
-      const idx = occCount[imgId] || 0;
-      occCount[imgId] = idx + 1;
-
-      if (idx >= queue.length) return full; // safety guard
-
-      const entry = queue[idx];
-      const cacheKey = `${jobId}_${entry.pageNum}_${entry.imgIndex}`;
-      const dataUri = groundingImageCache[cacheKey];
-      if (dataUri) {
-        return `${altPart}(${dataUri})`;
-      }
-      return full; // keep original if fetch failed
-    },
-  );
+    const entry = queue[idx];
+    const uri = groundingImageCache[entry.filename];
+    return uri ? `${altPart}(${uri})` : full;
+  });
 
   return markdown;
 }
