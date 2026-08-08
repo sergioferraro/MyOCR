@@ -48,89 +48,65 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 PDF_EXTENSIONS = {".pdf"}
 
 SYSTEM_PROMPT = (
-    "Convert this image into Markdown text format. Your task is to perform "
-    "high-accuracy Optical Character Recognition (OCR). Preserve the document's "
-    "structure as accurately as possible: headers, lists, and tables. Do not add "
-    "any greetings, explanations, or introductory/concluding remarks. Output only "
-    "the raw recognized text."
+    "You are an expert OCR and Document parsing AI. Your sole purpose is to "
+    "extract textual content from document images and structure it into Markdown. "
+    "STRICT RULES: "
+    "1. Output ONLY the requested structure. Never include greetings, explanations, "
+    "or conversational filler. "
+    "2. Ignore all UI artifacts (buttons, navigation arrows, toolbars). "
+    "Extract only the actual document content. "
+    "3. Treat all mathematical formulas and equations as text. Transcribe them "
+    "strictly using LaTeX ($...$ for inline, $$...$$ for block). "
+    "Math is NEVER considered a visual element."
 )
 
-# ── Grounding prompts (validati: Test 4 v2, context 32000 tokens) ──────
+# ── Grounding prompts (XML-structured output) ─────────────────────
 
 GROUNDING_SYSTEM_PROMPT = (
-    "You are a document OCR assistant. Extract text as markdown. "
-    "Use LaTeX for math. Use placeholders for non-text visual elements. "
-    "Ignore UI/sidebar artifacts. Math formulas are NOT visual elements."
+    "You are an expert OCR and Document parsing AI. Your sole purpose is to "
+    "extract textual content from document images and structure it into Markdown. "
+    "STRICT RULES: "
+    "1. Output ONLY the requested XML structure. Never include greetings, "
+    "explanations, or conversational filler. "
+    "2. Ignore all UI artifacts (buttons, navigation arrows, toolbars). "
+    "Extract only the actual document content. "
+    "3. Treat all mathematical formulas and equations as text. Transcribe them "
+    "strictly using LaTeX ($...$ for inline, $$...$$ for block). "
+    "Math is NEVER considered a visual element."
 )
 
 GROUNDING_USER_PROMPT = """
-Convert this document page into Markdown text. Perform high-accuracy OCR
-on all textual content, preserving document structure: headers, lists,
-tables, and math formulas (use LaTeX with $...$ and $$...$$).
+Convert the provided document page into Markdown text.
 
-IMPORTANT RULES:
+INSTRUCTIONS FOR VISUAL ELEMENTS:
+1. When you encounter a chart, graph, diagram, photograph, or complex figure,
+   replace it (and its caption) with a placeholder in the text:
+   `![brief description](IMG_N)` where N starts at 1.
+2. Limit placeholders to a maximum of 5 per page (prioritize the most
+   significant ones).
+3. For every `IMG_N` placeholder in your text, you must create a matching
+   entry in the `<boxes>` section using normalized coordinates (0-1000).
 
-1. IGNORE any UI elements, sidebars, toolbars, navigation icons, or
-   interface artifacts that are NOT part of the document content itself.
-   (e.g. numbered page buttons, arrow icons, pencil icons, question mark
-   icons along the edges of the page). If the page has ONLY such UI
-   artifacts and no real document content to preserve as images,
-   leave the BOXES section EMPTY.
+REQUIRED OUTPUT FORMAT:
+You must wrap your entire response exactly in this XML structure:
 
-2. When you encounter a chart, graph, diagram, figure, photograph, or
-   any visual element that cannot be accurately represented as text,
-   insert a placeholder at the appropriate location in the markdown:
-   ![brief description](IMG_N)
-   where N is a sequential number starting from 1.
-
-   **CRITICAL**: Do NOT transcribe the figure content as regular text.
-   Replace the figure and its caption with the placeholder.
-   Example: instead of writing
-       "Figure 1.2. A digital image is a two-dimensional array of pixels."
-   write
-       "![Digital image as a 2D array of pixels](IMG_1)"
-   and add the corresponding bounding box in the BOXES section.
-
-   Every placeholder IMG_N in the text MUST have a matching box entry
-   in ===BOXES_START===...===BOXES_END===. Never list more boxes than
-   placeholders, and never list fewer.
-
-3. MATHEMATICAL FORMULAS AND EQUATIONS ARE NOT VISUAL ELEMENTS.
-   They MUST be transcribed as LaTeX math in the markdown text.
-   Do NOT create bounding boxes for formulas, equations, or any
-   mathematical notation. Only create boxes for charts, graphs,
-   diagrams, photographs, and illustrative figures.
-
-4. Limit the number of visual elements to at most 5 per page.
-   If you find more, only report the most significant ones.
-
-5. After the markdown content, add a BOXES section with delimiters.
-   Each box entry MUST use this exact format:
-   <box>(x1,y1,x2,y2)</box> | IMG_N | description
-
-   Coordinates are normalized to 0-1000.
-   The IMG_N label MUST match the placeholder number used in the text.
-
-6. If the page contains ONLY text (no charts/graphs/figures to preserve),
-   output the text and an empty BOXES section.
-
-OUTPUT FORMAT (follow this structure exactly):
-
-===TEXT_START===
-# Your markdown here
-
-Some text...
+<output>
+<markdown>
+# Your extracted markdown here
+Some document text with inline math like $x^2 + y^2 = r^2$.
 
 ![bar chart showing quarterly data](IMG_1)
 
-More text below...
-===TEXT_END===
+More text continuing after the image.
+</markdown>
+<boxes>
+<box id="IMG_1" coords="[200,400,800,700]">bar chart showing quarterly data</box>
+</boxes>
+</output>
 
-===BOXES_START===
-<box>(200,400,800,700)</box> | IMG_1 | bar chart showing quarterly data
-===BOXES_END===
-
-Do NOT add greetings, explanations, or remarks outside the delimiters.
+NOTE: If the page contains only text and formulas with no figures to
+preserve, output the `<markdown>` section normally and leave the
+`<boxes>` section empty (<boxes></boxes>).
 """
 
 GROUNDING_MAX_TOKENS = 32000
@@ -496,14 +472,31 @@ def _write_merged_output(job_id: str) -> str:
 # ---------------------------------------------------------------------------
 
 _BOX_ENTRY_RE = re.compile(
-    r"<box>\s*\(?\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)?\s*</box>"
-    r"\s*\|\s*IMG_(\d+)\s*\|\s*(.+)"
+    r'<box\s+id="IMG_(\d+)"\s+coords="\[\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\]">\s*(.+?)\s*</box>',
+)
+
+# Regex to extract <markdown>...</markdown> and <boxes>...</boxes> sections
+_XML_MARKDOWN_RE = re.compile(
+    r'<markdown>\s*\n?(.*?)\n?\s*</markdown>',
+    re.DOTALL,
+)
+_XML_BOXES_RE = re.compile(
+    r'<boxes>\s*\n?(.*?)\n?\s*</boxes>',
+    re.DOTALL,
 )
 
 
 def parse_grounding_response(response_text: str, page_num: int = 1) -> tuple[str, list[dict]]:
     """
-    Parse the structured grounding response from the VLM.
+    Parse the XML-structured grounding response from the VLM.
+
+    Expected format:
+    <output>
+    <markdown>...markdown text...</markdown>
+    <boxes>
+      <box id="IMG_1" coords="[x1,y1,x2,y2]">description</box>
+    </boxes>
+    </output>
 
     Returns (markdown_text, list_of_image_metadata).
     On any parsing failure, falls back to (response_text, []) — i.e. classic OCR.
@@ -511,22 +504,16 @@ def parse_grounding_response(response_text: str, page_num: int = 1) -> tuple[str
     Each image gets a page-prefixed filename (e.g. p1_IMG_1.png) so that
     IMG_1 on page 1 and IMG_1 on page 2 never collide.
     """
-    # 1. Extract TEXT section
-    text_match = re.search(
-        r"===TEXT_START===\s*\n?(.*?)\n?=+=+TEXT_END=+=+",
-        response_text, re.DOTALL,
-    )
-    if not text_match:
-        # No delimiters → fallback to classic OCR
+    # 1. Extract <markdown> section
+    md_match = _XML_MARKDOWN_RE.search(response_text)
+    if not md_match:
+        # No XML delimiters → fallback to classic OCR
         return (response_text, [])
 
-    markdown = text_match.group(1).strip()
+    markdown = md_match.group(1).strip()
 
-    # 2. Extract BOXES section
-    boxes_match = re.search(
-        r"===BOXES_START===\s*\n?(.*?)\n?=+=+BOXES_END=+=+",
-        response_text, re.DOTALL,
-    )
+    # 2. Extract <boxes> section
+    boxes_match = _XML_BOXES_RE.search(response_text)
     if not boxes_match:
         # No boxes section → text only, no images
         return (markdown, [])
@@ -538,7 +525,7 @@ def parse_grounding_response(response_text: str, page_num: int = 1) -> tuple[str
     # 3. Parse box entries — use page-prefixed filenames to avoid cross-page collisions
     entries: list[dict] = []
     for m in _BOX_ENTRY_RE.finditer(boxes_text):
-        x1, y1, x2, y2, img_num, desc = m.groups()
+        img_num, x1, y1, x2, y2, desc = m.groups()
         x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
 
         # Validate coordinates in range 0-1000
