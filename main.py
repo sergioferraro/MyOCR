@@ -135,6 +135,12 @@ Do NOT add greetings, explanations, or remarks outside the delimiters.
 
 GROUNDING_MAX_TOKENS = 32000
 
+# ── Sampling params per risposte deterministiche ────────────────
+# temperature=0 → massimo determinismo (nessuna casualità)
+# top_p=0.1 → nucleus sampling molto stretto
+OCR_TEMPERATURE = 0.0
+OCR_TOP_P = 0.1
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -210,7 +216,7 @@ class PageResult:
     #   "id": "IMG_1",
     #   "description": "bar chart showing quarterly revenue",
     #   "bbox": [x1, y1, x2, y2],       # normalizzate 0-1000
-    #   "image_filename": "IMG_1.png",  # salvato in images/
+    #   "image_filename": "p1_IMG_1.png",  # page-prefixed, salvato in images/
     # }
     grounding_enabled: bool = False
     page_image_bytes: bytes = b""   # PNG bytes della pagina intera (per crop differito)
@@ -338,6 +344,8 @@ def _send_page_to_vlm(image_bytes: bytes, model: str, url: str) -> str:
             ]},
         ],
         max_tokens=8192,
+        temperature=OCR_TEMPERATURE,
+        top_p=OCR_TOP_P,
     )
     return response.choices[0].message.content
 
@@ -356,6 +364,8 @@ def _send_page_to_vlm_grounding(image_bytes: bytes, model: str, url: str) -> str
             ]},
         ],
         max_tokens=GROUNDING_MAX_TOKENS,
+        temperature=OCR_TEMPERATURE,
+        top_p=OCR_TOP_P,
     )
     return response.choices[0].message.content
 
@@ -397,7 +407,7 @@ def _process_single_page(
             _add_log(job_id, f"[{page_num}/{doc.page_count}] Sending page {page_num} to VLM ({model}, grounding)...")
             result = _send_page_to_vlm_grounding(page_bytes, model, url)
 
-            markdown, img_metadata = parse_grounding_response(result)
+            markdown, img_metadata = parse_grounding_response(result, page_num)
 
             _update_page_result(
                 job_id, page_num,
@@ -487,12 +497,15 @@ _BOX_ENTRY_RE = re.compile(
 )
 
 
-def parse_grounding_response(response_text: str) -> tuple[str, list[dict]]:
+def parse_grounding_response(response_text: str, page_num: int = 1) -> tuple[str, list[dict]]:
     """
     Parse the structured grounding response from the VLM.
 
     Returns (markdown_text, list_of_image_metadata).
     On any parsing failure, falls back to (response_text, []) — i.e. classic OCR.
+
+    Each image gets a page-prefixed filename (e.g. p1_IMG_1.png) so that
+    IMG_1 on page 1 and IMG_1 on page 2 never collide.
     """
     # 1. Extract TEXT section
     text_match = re.search(
@@ -518,7 +531,7 @@ def parse_grounding_response(response_text: str) -> tuple[str, list[dict]]:
     if not boxes_text:
         return (markdown, [])
 
-    # 3. Parse box entries
+    # 3. Parse box entries — use page-prefixed filenames to avoid cross-page collisions
     entries: list[dict] = []
     for m in _BOX_ENTRY_RE.finditer(boxes_text):
         x1, y1, x2, y2, img_num, desc = m.groups()
@@ -530,11 +543,13 @@ def parse_grounding_response(response_text: str) -> tuple[str, list[dict]]:
             continue
 
         img_id = f"IMG_{img_num}"
+        # Page-prefixed filename: p1_IMG_1.png, p2_IMG_1.png, etc.
+        prefixed_filename = f"p{page_num}_{img_id}.png"
         entries.append({
             "id": img_id,
             "description": desc.strip(),
             "bbox": [x1, y1, x2, y2],
-            "image_filename": f"IMG_{img_num}.png",
+            "image_filename": prefixed_filename,
         })
 
     # 4. Safety: max 5 boxes per page
@@ -597,6 +612,10 @@ def _write_grounding_output(job_id: str) -> str:
     """
     Write grounding output: crop images from bounding boxes and assemble
     extracted.md with placeholders. Returns path to the output directory.
+
+    Images are saved with page-prefixed filenames (p1_IMG_1.png, p2_IMG_1.png…)
+    so that the VLM's per-page numbering never collides across pages.
+    No global rename map is needed.
     """
     with jobs_lock:
         job = jobs.get(job_id)
@@ -610,53 +629,47 @@ def _write_grounding_output(job_id: str) -> str:
     images_dir = out_dir / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
 
-    # Collect all grounding images and crop them.
-    # Build a per-page rename map so that IMG_1 on page 1 and IMG_1 on page 2
-    # get different global filenames and are replaced independently.
-    global_counter = 1
-    page_rename_map: dict[int, dict[str, str]] = {}  # page_num -> { "IMG_1": "IMG_1.png", ... }
+    # ── Phase 1: crop and save all grounding images ──────────────────────
+    # Build a lookup: page_num -> { "IMG_1": "p1_IMG_1.png", … }
+    # so we can replace placeholders in markdown per-page.
+    page_img_map: dict[int, dict[str, str]] = {}
 
     for pn in sorted(job.page_results.keys()):
         pr = job.page_results[pn]
         if not pr.grounding_enabled or not pr.grounding_images:
             continue
 
-        page_rename_map[pn] = {}
+        page_img_map[pn] = {}
         for entry in pr.grounding_images:
-            old_id = entry["id"]  # e.g. "IMG_1" (from VLM, per-page)
+            img_id = entry["id"]            # e.g. "IMG_1" (VLM per-page label)
+            out_filename = entry["image_filename"]  # e.g. "p1_IMG_1.png"
             bbox = tuple(entry["bbox"])
-
-            # Global unique filename
-            new_filename = f"IMG_{global_counter}.png"
-            global_counter += 1
 
             # Crop from stored page image bytes
             if pr.page_image_bytes:
                 cropped_bytes = crop_page_image(pr.page_image_bytes, bbox, 150)
             else:
-                cropped_bytes = pr.page_image_bytes  # fallback: empty
+                cropped_bytes = b""  # fallback: empty
 
-            # Save cropped image
-            out_path = images_dir / new_filename
+            # Save cropped image with page-prefixed name
+            out_path = images_dir / out_filename
             with open(out_path, "wb") as fh:
                 fh.write(cropped_bytes)
 
-            page_rename_map[pn][old_id] = new_filename
+            page_img_map[pn][img_id] = out_filename
 
-    # Assemble markdown — replace placeholders per-page to avoid cross-page collisions
+    # ── Phase 2: assemble markdown, replacing placeholders per-page ──────
     md_parts: list[str] = []
     for pn in sorted(job.page_results.keys()):
         pr = job.page_results[pn]
         if pr.markdown:
             page_md = pr.markdown
-            # Replace this page's IMG_N references with correct global filenames
-            if pn in page_rename_map:
-                for old_id, new_filename in page_rename_map[pn].items():
-                    # Replace ](IMG_N) with ](images/IMG_N.png)
-                    # Use a regex to only replace the link part, not any stray text
+            # Replace ](IMG_N) → ](images/pN_IMG_N.png) only for this page
+            if pn in page_img_map:
+                for old_id, out_filename in page_img_map[pn].items():
                     page_md = re.sub(
                         rf"\]\(({re.escape(old_id)})\)",
-                        f"](images/{new_filename})",
+                        f"](images/{out_filename})",
                         page_md,
                     )
             md_parts.append(page_md)
