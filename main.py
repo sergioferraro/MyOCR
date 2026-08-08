@@ -88,7 +88,9 @@ INSTRUCTIONS FOR VISUAL ELEMENTS:
    entry in the `<boxes>` section using normalized coordinates (0-1000).
 
 REQUIRED OUTPUT FORMAT:
-You must wrap your entire response exactly in this XML structure:
+You must wrap your entire response exactly in this XML structure. For the
+entries inside the `<boxes>` tag, use plain text separated by the pipe
+character `|`. Do NOT use any brackets or parentheses for the coordinates.
 
 <output>
 <markdown>
@@ -100,7 +102,7 @@ Some document text with inline math like $x^2 + y^2 = r^2$.
 More text continuing after the image.
 </markdown>
 <boxes>
-<box id="IMG_1" coords="[200,400,800,700]">bar chart showing quarterly data</box>
+IMG_1 | 200,400,800,700 | bar chart showing quarterly data
 </boxes>
 </output>
 
@@ -472,7 +474,8 @@ def _write_merged_output(job_id: str) -> str:
 # ---------------------------------------------------------------------------
 
 _BOX_ENTRY_RE = re.compile(
-    r'<box\s+id="IMG_(\d+)"\s+coords="\[\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\]">\s*(.+?)\s*</box>',
+    r'IMG_(\d+)\s*\|\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\|\s*(.+?)\s*$',
+    re.MULTILINE,
 )
 
 # Regex to extract <markdown>...</markdown> and <boxes>...</boxes> sections
@@ -494,7 +497,7 @@ def parse_grounding_response(response_text: str, page_num: int = 1) -> tuple[str
     <output>
     <markdown>...markdown text...</markdown>
     <boxes>
-      <box id="IMG_1" coords="[x1,y1,x2,y2]">description</box>
+      IMG_1 | x1,y1,x2,y2 | description
     </boxes>
     </output>
 
