@@ -51,14 +51,46 @@ SYSTEM_PROMPT = (
     "You are an expert OCR and Document parsing AI. Your sole purpose is to "
     "extract textual content from document images and structure it into Markdown. "
     "STRICT RULES: "
-    "1. Output ONLY the requested structure. Never include greetings, explanations, "
-    "or conversational filler. "
+    "1. Output ONLY the requested XML structure. Never include greetings, "
+    "explanations, or conversational filler. "
     "2. Ignore all UI artifacts (buttons, navigation arrows, toolbars). "
     "Extract only the actual document content. "
     "3. Treat all mathematical formulas and equations as text. Transcribe them "
     "strictly using LaTeX ($...$ for inline, $$...$$ for block). "
-    "Math is NEVER considered a visual element."
+    "Math is NEVER considered a visual element. "
+    "4. Convert ALL tables to proper Markdown table syntax (| col1 | col2 |). "
+    "Never output raw LaTeX table commands. "
+    "5. Use Markdown headings (# ## ###) — never raw LaTeX commands "
+    "(\\section, \\subsection, etc.). "
+    "6. Do NOT invent image placeholder URLs. Describe figures inline as "
+    "[Figure: description]."
 )
+
+# ── Non-grounding user prompt ──────────────────────────────────────
+
+USER_PROMPT = """
+Convert the provided document page into Markdown text.
+
+INSTRUCTIONS FOR VISUAL ELEMENTS:
+1. When you encounter a chart, graph, diagram, photograph, or complex figure,
+   describe it concisely within the Markdown text flow.
+2. Do not use image placeholders, coordinate mapping, or grounding references.
+3. Preserve all textual content, formatting, lists, and mathematical expressions exactly.
+
+REQUIRED OUTPUT FORMAT:
+You must wrap your entire response exactly in this XML structure.
+
+<output>
+<markdown>
+# Your extracted markdown here
+Some document text with inline math like $x^2 + y^2 = r^2$.
+
+[Figure: Bar chart showing quarterly data]
+
+More text continuing after the image.
+</markdown>
+</output>
+"""
 
 # ── Grounding prompts (XML-structured output) ─────────────────────
 
@@ -307,6 +339,27 @@ def _update_page_result(job_id: str, page_num: int, **kwargs):
 # OCR Core
 # ---------------------------------------------------------------------------
 
+# ── Regex for non-grounding XML parsing ─────────────────────────────
+_NON_GROUNDING_MD_RE = re.compile(
+    r'<markdown>\s*\n?(.*?)\n?\s*</markdown>',
+    re.DOTALL,
+)
+
+
+def _parse_non_grounding_response(response_text: str) -> str:
+    """
+    Extract the <markdown>...</markdown> content from a non-grounding VLM response.
+
+    On parsing failure (no XML tags found), returns the raw response as-is
+    so the pipeline never breaks.
+    """
+    match = _NON_GROUNDING_MD_RE.search(response_text)
+    if match:
+        return match.group(1).strip()
+    # Fallback: return raw text (model ignored XML wrapping)
+    return response_text.strip()
+
+
 def _get_client(url: str) -> OpenAI:
     return OpenAI(base_url=f"{url}/v1", api_key="not-needed")
 
@@ -319,7 +372,7 @@ def _send_page_to_vlm(image_bytes: bytes, model: str, url: str) -> str:
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": [
-                {"type": "text", "text": "Extract the text from this image."},
+                {"type": "text", "text": USER_PROMPT},
                 {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
             ]},
         ],
@@ -328,7 +381,7 @@ def _send_page_to_vlm(image_bytes: bytes, model: str, url: str) -> str:
         top_p=OCR_TOP_P,
         seed=OCR_SEED,
     )
-    return response.choices[0].message.content
+    return _parse_non_grounding_response(response.choices[0].message.content)
 
 
 def _send_page_to_vlm_grounding(image_bytes: bytes, model: str, url: str) -> str:
