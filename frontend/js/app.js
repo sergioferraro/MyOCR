@@ -46,6 +46,7 @@ const progressPanel     = $('#progressPanel');
 const progressBarFill   = $('.progress-fill');
 const progressText      = $('#progressText');
 const btnStop           = $('#btnStop');
+const btnSaveConfig     = $('#btnSaveConfig');
 const logPanel          = $('#logPanel');
 const logBox            = $('#logBox');
 
@@ -1450,6 +1451,15 @@ btnHyphenationAll.addEventListener('click', () => {
 });
 
 // ── Config persistence ───────────────────────────────────────────
+const configStatus = $('#configStatus');
+
+function flashConfigStatus(msg, isError = false) {
+  configStatus.textContent = msg;
+  configStatus.className = 'config-status' + (isError ? ' error' : '');
+  show(configStatus);
+  setTimeout(() => hide(configStatus), 2500);
+}
+
 async function loadConfig() {
   try {
     const res = await fetch('/api/config');
@@ -1475,15 +1485,19 @@ async function saveConfig() {
       force_vlm: forceVlmCheckbox.checked,
       grounding: groundingToggle.checked,
     };
-    await fetch('/api/config', { method: 'POST', body: JSON.stringify(payload) });
+    const res = await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    flashConfigStatus('Settings saved ✓');
   } catch (err) {
-    console.warn('Config save failed:', err);
+    flashConfigStatus(`Save failed: ${err.message}`, true);
   }
 }
 
-// Auto-save config whenever a setting changes
-[serverUrlInput, modelSelect, dpiSelect, forceVlmCheckbox, groundingToggle]
-  .forEach(el => el.addEventListener('change', saveConfig));
+btnSaveConfig.addEventListener('click', saveConfig);
 
 // ── Init ─────────────────────────────────────────────────────────
 (async () => {

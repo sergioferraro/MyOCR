@@ -202,6 +202,25 @@ header h1 {
   padding-left: 22px;
 }
 
+/* ── Config status toast ──────────────────────────────────────── */
+.config-status {
+  display: inline-block;
+  margin-top: 8px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #22c55e;
+  animation: fadeIn 0.2s ease;
+}
+
+.config-status.error {
+  color: #dc3545;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
 /* ── Grounding badge ──────────────────────────────────────────── */
 .grounding-badge {
   font-size: 0.65rem;
