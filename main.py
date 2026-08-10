@@ -1138,6 +1138,9 @@ async def reprocess_page(
     """
     Reprocess a single page of an existing PDF job with a (possibly different) model.
     The page's markdown result is replaced in-place.
+    Respects the original job's grounding setting: if the job was grounding-enabled,
+    the reprocessed page is sent through the grounding VLM pipeline and the
+    grounding output directory is rewritten so downloads reflect the change.
     """
     if not model:
         raise HTTPException(status_code=400, detail="Model is required")
@@ -1156,12 +1159,14 @@ async def reprocess_page(
             detail=f"Page {page_num} is out of range (1-{job.total_pages})",
         )
 
+    grounding = job.grounding_enabled
+
     # Open the stored PDF and process the requested page
     try:
         doc = fitz.open(stream=job.file_bytes, filetype="pdf")
         page_idx = page_num - 1
 
-        _add_log(job_id, f"[Reprocess] Page {page_num} with model {model}...")
+        _add_log(job_id, f"[Reprocess] Page {page_num} with model {model}{' (grounding)' if grounding else ''}...")
         _ensure_page_result(job_id, page_num)
         _update_page_result(job_id, page_num, status="processing")
 
@@ -1169,17 +1174,39 @@ async def reprocess_page(
         pix = page.get_pixmap(dpi=dpi)
         page_bytes = pix.tobytes("png")
 
-        result = _send_page_to_vlm(page_bytes, model, url)
-        _update_page_result(
-            job_id, page_num,
-            markdown=result, model=model,
-            method="vlm", status="done",
-        )
-        _add_log(job_id, f"[Success] Page {page_num} reprocessed with {model}")
+        if grounding:
+            # ── Grounding mode: use grounding VLM + rewrite grounding output ──
+            result = _send_page_to_vlm_grounding(page_bytes, model, url)
+            markdown, img_metadata = parse_grounding_response(result, page_num)
 
-        # Rewrite merged output
-        output_path = _write_merged_output(job_id)
-        _add_log(job_id, f"[Success] Merged output saved to {output_path}")
+            _update_page_result(
+                job_id, page_num,
+                markdown=markdown, model=model,
+                method="vlm_grounding", status="done",
+                grounding_images=img_metadata,
+                grounding_enabled=True,
+                page_image_bytes=page_bytes,
+            )
+            if img_metadata:
+                _add_log(job_id, f"[Reprocess] Grounding: {len(img_metadata)} image(s) detected")
+            else:
+                _add_log(job_id, f"[Reprocess] Grounding: no visual elements (text-only)")
+
+            # Rewrite the grounding output directory so downloads are up-to-date
+            output_path = _write_grounding_output(job_id)
+            _add_log(job_id, f"[Success] Page {page_num} reprocessed (grounding) → {output_path}")
+        else:
+            # ── Classic (non-grounding) mode ──────────────────────────────
+            result = _send_page_to_vlm(page_bytes, model, url)
+            _update_page_result(
+                job_id, page_num,
+                markdown=result, model=model,
+                method="vlm", status="done",
+            )
+
+            # Rewrite merged output
+            output_path = _write_merged_output(job_id)
+            _add_log(job_id, f"[Success] Page {page_num} reprocessed with {model} → {output_path}")
 
         return {
             "status": "ok",
