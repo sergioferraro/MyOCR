@@ -646,7 +646,7 @@ async function syncFromPreview() {
     selectedPageNum = pageNum1based;
     let md = pr.markdown || '<!-- pagina non processata -->';
     if (groundingEnabled && currentJobId) {
-      md = await resolveGroundingImages(md, currentJobId);
+      md = await resolveGroundingImages(md, currentJobId, pr.page_num);
     }
     renderMarkdown(md);
   }
@@ -986,7 +986,7 @@ function renderPageResultsList() {
       // Resolve grounding images in single-page markdown
       let md = pr.markdown || '<!-- page not processed -->';
       if (groundingEnabled && currentJobId) {
-        md = await resolveGroundingImages(md, currentJobId);
+        md = await resolveGroundingImages(md, currentJobId, pr.page_num);
       }
       renderMarkdown(md);
     });
@@ -1026,7 +1026,7 @@ function renderPageResultsList() {
           syncFromSidebar(pr.page_num);
           let md = pr.markdown || '<!-- page not processed -->';
           if (groundingEnabled && currentJobId) {
-            md = await resolveGroundingImages(md, currentJobId);
+            md = await resolveGroundingImages(md, currentJobId, pr.page_num);
           }
           renderMarkdown(md);
         });
@@ -1042,10 +1042,16 @@ function renderPageResultsList() {
 // The file output rewrites them to ![desc](images/pN_IMG_N.png).
 // This function handles BOTH formats and replaces with data URIs
 // so zero-md can render images inline.
-async function resolveGroundingImages(markdown, jobId) {
+//
+// When `pageNum` is provided (single-page view), Phase 2 resolves raw
+// IMG_N placeholders using ONLY that page's grounding_images metadata,
+// so images are never mixed across pages.
+// When `pageNum` is null (merged markdown), Phase 2 is skipped —
+// buildMergedMarkdown() already rewrites paths so Phase 1 handles everything.
+async function resolveGroundingImages(markdown, jobId, pageNum) {
   if (!groundingEnabled) return markdown;
 
-  // ── Phase 1: resolve paths already rewritten by backend
+  // ── Phase 1: resolve paths already rewritten (page-prefixed)
   //          e.g. ![desc](images/p1_IMG_1.png)
   const resolvedRe = /(!\[[^\]]*\])\(images\/(p\d+_IMG_\d+\.png)\)/g;
   const resolvedMatches = [...markdown.matchAll(resolvedRe)];
@@ -1057,10 +1063,10 @@ async function resolveGroundingImages(markdown, jobId) {
       if (groundingImageCache[path]) continue;
 
       const pageMatch = path.match(/^p(\d+)/);
-      const pageNum = pageMatch ? parseInt(pageMatch[1], 10) : 0;
+      const pn = pageMatch ? parseInt(pageMatch[1], 10) : 0;
 
       fetchPromises.push(
-        fetch(`/api/download-image/${jobId}/${encodeURIComponent(path)}?page_num=${pageNum}`)
+        fetch(`/api/download-image/${jobId}/${encodeURIComponent(path)}?page_num=${pn}`)
           .then(res => res.ok ? res.blob() : null)
           .then(blob => {
             if (blob) return blobToDataUri(blob).then(uri => { groundingImageCache[path] = uri; });
@@ -1077,59 +1083,47 @@ async function resolveGroundingImages(markdown, jobId) {
   }
 
   // ── Phase 2: resolve raw ![desc](IMG_N) placeholders
-  //          The VLM re-numbers from IMG_1 on every page, so IMG_1 appears
-  //          on multiple pages. We build per-ID queues from pageResults
-  //          (in page order) and consume them sequentially.
+  //          Only active for single-page view (pageNum provided).
+  //          For merged markdown, paths are already rewritten by
+  //          buildMergedMarkdown() so Phase 1 handles everything.
+  if (pageNum == null) return markdown;
+
   const rawRe = /(!\[[^\]]*\])\(IMG_(\d+)\)/g;
   const rawMatches = [...markdown.matchAll(rawRe)];
-
   if (rawMatches.length === 0) return markdown;
 
-  // Build queues: IMG_N → [{pageNum, filename}, ...]
-  const queues = {};
-  for (const pr of pageResults) {
-    if (!pr.grounding_images) continue;
-    for (const entry of pr.grounding_images) {
-      const id = entry.id; // "IMG_1"
-      if (!queues[id]) queues[id] = [];
-      queues[id].push({
-        pageNum: pr.page_num,
-        filename: entry.image_filename, // "p1_IMG_1.png"
-      });
-    }
+  // Build a lookup from ONLY this page's grounding_images
+  const pr = pageResults.find(p => p.page_num === pageNum);
+  if (!pr || !pr.grounding_images) return markdown;
+
+  const imgMap = {};
+  for (const entry of pr.grounding_images) {
+    imgMap[entry.id] = entry.image_filename; // "IMG_1" → "p3_IMG_1.png"
   }
 
-  // Pre-fetch all needed images
+  // Pre-fetch images for this page
   const fetchPromises = [];
-  for (const id in queues) {
-    for (const q of queues[id]) {
-      const key = q.filename;
-      if (groundingImageCache[key]) continue;
-      fetchPromises.push(
-        fetch(`/api/download-image/${jobId}/${encodeURIComponent(q.filename)}?page_num=${q.pageNum}`)
-          .then(res => res.ok ? res.blob() : null)
-          .then(blob => {
-            if (blob) return blobToDataUri(blob).then(uri => { groundingImageCache[key] = uri; });
-          })
-          .catch(() => {}),
-      );
-    }
+  for (const raw of rawMatches) {
+    const id = `IMG_${raw[2]}`;
+    const filename = imgMap[id];
+    if (!filename || groundingImageCache[filename]) continue;
+    fetchPromises.push(
+      fetch(`/api/download-image/${jobId}/${encodeURIComponent(filename)}?page_num=${pageNum}`)
+        .then(res => res.ok ? res.blob() : null)
+        .then(blob => {
+          if (blob) return blobToDataUri(blob).then(uri => { groundingImageCache[filename] = uri; });
+        })
+        .catch(() => {}),
+    );
   }
   if (fetchPromises.length > 0) await Promise.all(fetchPromises);
 
-  // Replace raw placeholders — consume queues in order
-  const counters = {};
+  // Replace raw placeholders using this page's image map
   markdown = markdown.replace(rawRe, (full, altPart, num) => {
     const id = `IMG_${num}`;
-    const queue = queues[id];
-    if (!queue) return full;
-
-    const idx = counters[id] || 0;
-    counters[id] = idx + 1;
-    if (idx >= queue.length) return full;
-
-    const entry = queue[idx];
-    const uri = groundingImageCache[entry.filename];
+    const filename = imgMap[id];
+    if (!filename) return full;
+    const uri = groundingImageCache[filename];
     return uri ? `${altPart}(${uri})` : full;
   });
 
@@ -1333,10 +1327,28 @@ function fixHyphenation(text) {
   return text;
 }
 
-/** Build merged markdown from pageResults (respects post-processing) */
+/** Build merged markdown from pageResults (respects post-processing)
+ * Rewrites raw IMG_N placeholders to page-prefixed paths (images/pN_IMG_N.png)
+ * so that resolveGroundingImages Phase 1 can resolve them correctly.
+ * Mirrors the backend logic in _write_grounding_output().
+ */
 function buildMergedMarkdown() {
   if (!pageResults || pageResults.length === 0) return '';
-  const parts = pageResults.map(pr => pr.markdown || '');
+  const parts = pageResults.map(pr => {
+    let md = pr.markdown || '';
+    // Rewrite raw IMG_N → images/pN_IMG_N.png using this page's grounding metadata
+    if (pr.grounding_images && pr.grounding_images.length > 0) {
+      for (const entry of pr.grounding_images) {
+        const id = entry.id;              // "IMG_1"
+        const filename = entry.image_filename; // "p1_IMG_1.png"
+        md = md.replace(
+          new RegExp(`\\]\\(${id}\\)`, 'g'),
+          `](images/${filename})`,
+        );
+      }
+    }
+    return md;
+  });
   return parts.join('\n\n').trim();
 }
 
