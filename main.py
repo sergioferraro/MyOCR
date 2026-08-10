@@ -41,11 +41,21 @@ import fitz  # pymupdf
 # ---------------------------------------------------------------------------
 BASE_DIR = Path(__file__).parent
 FRONTEND_DIR = BASE_DIR / "frontend"
+CONFIG_PATH = BASE_DIR / "config.json"
 
 DEFAULT_URL = "http://localhost:1234"
 DPI_OPTIONS = [100, 150, 200, 300]
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 PDF_EXTENSIONS = {".pdf"}
+
+# ── Default config values ─────────────────────────────────────────
+DEFAULT_CONFIG = {
+    "vlm_url": DEFAULT_URL,
+    "model": "",
+    "dpi": 150,
+    "force_vlm": False,
+    "grounding": False,
+}
 
 SYSTEM_PROMPT = (
     "You are an expert OCR and Document parsing AI. Your sole purpose is to "
@@ -152,6 +162,43 @@ GROUNDING_MAX_TOKENS = 32000
 OCR_TEMPERATURE = 0.0
 OCR_TOP_P = 0.1
 OCR_SEED = 42
+
+# ---------------------------------------------------------------------------
+# Configuration (config.json)
+# ---------------------------------------------------------------------------
+
+def load_config() -> dict:
+    """
+    Read config from config.json. Missing keys are filled with defaults.
+    Returns a dict with all expected keys present.
+    """
+    cfg = dict(DEFAULT_CONFIG)
+    if CONFIG_PATH.is_file():
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+            if isinstance(saved, dict):
+                for key in DEFAULT_CONFIG:
+                    if key in saved:
+                        cfg[key] = saved[key]
+        except (json.JSONDecodeError, OSError) as exc:
+            print(f"[Config] Warning: could not read {CONFIG_PATH}: {exc}")
+    return cfg
+
+
+def save_config(cfg: dict) -> None:
+    """
+    Write config dict to config.json.
+    Only writes keys that are part of DEFAULT_CONFIG.
+    """
+    filtered = {k: v for k, v in cfg.items() if k in DEFAULT_CONFIG}
+    try:
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(filtered, f, indent=2)
+            f.write("\n")
+    except OSError as exc:
+        print(f"[Config] Warning: could not write {CONFIG_PATH}: {exc}")
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -980,6 +1027,30 @@ async def serve_frontend():
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "version": "2.1.0"}
+
+
+# ── Configuration ─────────────────────────────────────────────────────────
+
+@app.get("/api/config")
+async def get_config():
+    """Return the current server configuration."""
+    return load_config()
+
+
+@app.post("/api/config")
+async def update_config(body: dict):
+    """
+    Update server configuration.
+    Accepts any subset of: vlm_url, model, dpi, force_vlm, grounding.
+    Returns the full updated config.
+    """
+    cfg = load_config()
+    allowed = set(DEFAULT_CONFIG.keys())
+    for key, value in body.items():
+        if key in allowed:
+            cfg[key] = value
+    save_config(cfg)
+    return cfg
 
 
 # ── Models ────────────────────────────────────────────────────────────────

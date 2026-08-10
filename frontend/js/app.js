@@ -1449,5 +1449,44 @@ btnHyphenationAll.addEventListener('click', () => {
   }
 });
 
+// ── Config persistence ───────────────────────────────────────────
+async function loadConfig() {
+  try {
+    const res = await fetch('/api/config');
+    if (!res.ok) return;
+    const cfg = await res.json();
+
+    if (cfg.vlm_url) serverUrlInput.value = cfg.vlm_url;
+    if (cfg.model) modelSelect.value = cfg.model;
+    if (cfg.dpi) dpiSelect.value = String(cfg.dpi);
+    if (cfg.force_vlm != null) forceVlmCheckbox.checked = cfg.force_vlm;
+    if (cfg.grounding != null) groundingToggle.checked = cfg.grounding;
+  } catch (err) {
+    console.warn('Config load failed:', err);
+  }
+}
+
+async function saveConfig() {
+  try {
+    const payload = {
+      vlm_url: serverUrlInput.value.trim(),
+      model: modelSelect.value,
+      dpi: parseInt(dpiSelect.value, 10),
+      force_vlm: forceVlmCheckbox.checked,
+      grounding: groundingToggle.checked,
+    };
+    await fetch('/api/config', { method: 'POST', body: JSON.stringify(payload) });
+  } catch (err) {
+    console.warn('Config save failed:', err);
+  }
+}
+
+// Auto-save config whenever a setting changes
+[serverUrlInput, modelSelect, dpiSelect, forceVlmCheckbox, groundingToggle]
+  .forEach(el => el.addEventListener('change', saveConfig));
+
 // ── Init ─────────────────────────────────────────────────────────
-refreshModels();
+(async () => {
+  await loadConfig();
+  refreshModels();
+})();
