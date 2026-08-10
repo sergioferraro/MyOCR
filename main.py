@@ -28,7 +28,7 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Request
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Request, Body
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -1038,7 +1038,7 @@ async def get_config():
 
 
 @app.post("/api/config")
-async def update_config(body: dict):
+async def update_config(body: dict = Body(...)):
     """
     Update server configuration.
     Accepts any subset of: vlm_url, model, dpi, force_vlm, grounding.
