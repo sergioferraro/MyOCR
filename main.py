@@ -253,7 +253,7 @@ class PageResult:
 @dataclass
 class JobState:
     job_id: str
-    status: str = "pending"       # pending | processing | done | error
+    status: str = "pending"       # pending | processing | done | error | cancelled
     filename: str = ""
     total_pages: int = 0
     processed_pages: int = 0
@@ -269,6 +269,9 @@ class JobState:
     # Grounding
     grounding_enabled: bool = False
     output_dir: str = ""          # path alla cartella grounding (se applicabile)
+
+    # Cancel support
+    cancelled: bool = False       # set to True when user clicks Stop
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -315,6 +318,29 @@ def _set_status(job_id: str, status: str, message: str = ""):
                 jobs[job_id].message = message
                 if status == "done" and os.path.isfile(message):
                     jobs[job_id].output_path = message
+
+
+def _is_cancelled(job_id: str) -> bool:
+    """Check if a job has been cancelled by the user."""
+    with jobs_lock:
+        if job_id in jobs:
+            return jobs[job_id].cancelled
+    return False
+
+
+def _cancel_job(job_id: str) -> bool:
+    """Mark a job as cancelled. Returns True if the job was actively processing."""
+    with jobs_lock:
+        if job_id in jobs and jobs[job_id].status == "processing":
+            jobs[job_id].cancelled = True
+            jobs[job_id].status = "cancelled"
+            jobs[job_id].message = "Cancelled by user"
+            return True
+        elif job_id in jobs:
+            # Already done/error/cancelled — just return False
+            return False
+        else:
+            return False
 
 
 def _ensure_page_result(job_id: str, page_num: int):
@@ -752,6 +778,12 @@ def process_image(
     _ensure_page_result(job_id, 1)
     _update_page_result(job_id, 1, status="processing")
 
+    # Check for cancellation before sending to VLM
+    if _is_cancelled(job_id):
+        _add_log(job_id, "[Cancelled] Stopped before processing")
+        _set_status(job_id, "cancelled", "Cancelled by user")
+        return ""
+
     try:
         result = _send_page_to_vlm(file_bytes, model, url)
         _update_page_result(
@@ -824,6 +856,12 @@ def process_pdf(
         processed = 0
 
         for i in range(pages):
+            # ── Check for user cancellation ─────────────────────────
+            if _is_cancelled(job_id):
+                _add_log(job_id, f"[Cancelled] Stopped after page {processed}/{pages}")
+                _set_status(job_id, "cancelled", "Cancelled by user")
+                return ""
+
             pn = i + 1
             if pn not in selected_pages:
                 processed += 1
@@ -843,6 +881,12 @@ def process_pdf(
             _progress(job_id, processed, pages)
 
         # Merge and write output
+        # Final cancel check before writing output
+        if _is_cancelled(job_id):
+            _add_log(job_id, f"[Cancelled] Stopped after page {processed}/{pages}")
+            _set_status(job_id, "cancelled", "Cancelled by user")
+            return ""
+
         if grounding:
             output_path = _write_grounding_output(job_id)
             _add_log(job_id, (
@@ -886,8 +930,11 @@ def run_ocr_job(
     try:
         if ext in IMAGE_EXTENSIONS:
             output = process_image(file_bytes, model, url, job_id, filename)
-            _set_status(job_id, "done", output)
-            _progress(job_id, 1, 1)
+            # Only mark as done if not already cancelled
+            with jobs_lock:
+                if job_id in jobs and jobs[job_id].status != "cancelled":
+                    _set_status(job_id, "done", output)
+                    _progress(job_id, 1, 1)
         elif ext in PDF_EXTENSIONS:
             output = process_pdf(file_bytes, dpi, model, url, force_vlm, job_id, filename, page_spec, grounding)
         else:
@@ -1106,6 +1153,26 @@ async def get_job_status(job_id: str):
     return job.to_dict()
 
 
+# ── Cancel Job ────────────────────────────────────────────────────────────
+
+@app.post("/api/cancel/{job_id}")
+async def cancel_job(job_id: str):
+    """
+    Cancel a running OCR job.
+    The job will stop after the current page finishes processing.
+    """
+    was_processing = _cancel_job(job_id)
+    if was_processing:
+        return {"status": "cancelling", "message": "Job stop requested"}
+    else:
+        # Job not found, or already done/error/cancelled
+        with jobs_lock:
+            job = jobs.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        return {"status": job.status, "message": f"Job is {job.status}, nothing to cancel"}
+
+
 # ── Per-Page Status ───────────────────────────────────────────────────────
 
 @app.get("/api/pages/{job_id}")
@@ -1223,7 +1290,7 @@ async def reprocess_page(
 # ── SSE Stream ────────────────────────────────────────────────────────────
 
 async def event_stream(job_id: str):
-    end_statuses = {"done", "error"}
+    end_statuses = {"done", "error", "cancelled"}
     while True:
         with jobs_lock:
             job = jobs.get(job_id)
@@ -1266,6 +1333,8 @@ async def download_result(job_id: str):
         raise HTTPException(status_code=409, detail=f"Job '{job_id}' is still {job.status}.")
     if job.status == "error":
         raise HTTPException(status_code=422, detail=f"Job failed: {job.message}")
+    if job.status == "cancelled":
+        raise HTTPException(status_code=422, detail=f"Job was cancelled.")
 
     if job.grounding_enabled and job.output_dir and os.path.isdir(job.output_dir):
         # Return ZIP of the grounding output directory

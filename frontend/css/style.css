@@ -322,6 +322,33 @@ header h1 {
   cursor: not-allowed;
 }
 
+.btn-danger {
+  width: 100%;
+  padding: 12px;
+  background: #dc3545;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  margin-top: 10px;
+  transition: background 0.2s, transform 0.1s;
+}
+
+.btn-danger:hover {
+  background: #bb2d3b;
+}
+
+.btn-danger:active {
+  transform: scale(0.98);
+}
+
+.btn-danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .btn-small {
   padding: 6px 10px;
   background: var(--bg-input);

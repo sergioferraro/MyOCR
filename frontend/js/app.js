@@ -45,6 +45,7 @@ const postProcessingPanel = $('#postProcessingPanel');
 const progressPanel     = $('#progressPanel');
 const progressBarFill   = $('.progress-fill');
 const progressText      = $('#progressText');
+const btnStop           = $('#btnStop');
 const logPanel          = $('#logPanel');
 const logBox            = $('#logBox');
 
@@ -708,6 +709,7 @@ btnStart.addEventListener('click', async () => {
   clearLogs();
   clearMarkdown();
   show(progressPanel);
+  show(btnStop);
   show(logPanel);
   hide(sidebarActions);
   setProgress(0, 'Invio file...');
@@ -736,7 +738,31 @@ btnStart.addEventListener('click', async () => {
     btnStart.disabled = false;
     btnStart.textContent = '🚀 Start OCR';
     hide(progressPanel);
+    hide(btnStop);
     clearResultStatus();
+  }
+});
+
+// ── Stop OCR ─────────────────────────────────────────────────────
+btnStop.addEventListener('click', async () => {
+  if (!currentJobId) return;
+
+  btnStop.disabled = true;
+  btnStop.textContent = '⏳ Stopping...';
+
+  try {
+    const res = await fetch(`/api/cancel/${currentJobId}`, { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      addLog(`Cancel error: ${err.detail || 'Unknown'}`, 'error');
+    } else {
+      addLog('[Info] Stop requested, waiting for current page to finish...', 'info');
+    }
+  } catch (err) {
+    addLog(`Cancel request failed: ${err.message}`, 'error');
+  } finally {
+    btnStop.disabled = false;
+    btnStop.textContent = '⏹ Stop OCR';
   }
 });
 
@@ -777,6 +803,10 @@ function connectSSE(jobId) {
         eventSource.close();
         eventSource = null;
         onJobError(data);
+      } else if (data.status === 'cancelled') {
+        eventSource.close();
+        eventSource = null;
+        onJobCancelled(data);
       }
     } catch {
       // Ignore parse errors
@@ -811,6 +841,9 @@ async function pollStatus(jobId) {
       } else if (data.status === 'error') {
         clearInterval(interval);
         onJobError(data);
+      } else if (data.status === 'cancelled') {
+        clearInterval(interval);
+        onJobCancelled(data);
       }
     } catch {
       // keep polling
@@ -822,6 +855,7 @@ async function pollStatus(jobId) {
 async function onJobDone(data) {
   btnStart.disabled = false;
   btnStart.textContent = '🚀 Start OCR';
+  hide(btnStop);
   setProgress(100, 'Completed!');
 
   // Capture grounding state from server
@@ -851,9 +885,20 @@ async function onJobDone(data) {
 function onJobError(data) {
   btnStart.disabled = false;
   btnStart.textContent = '🚀 Avvia OCR';
+  hide(btnStop);
   setProgress(0, 'Errore');
 
   setResultStatus(`❌ ${data.message || 'Unknown error'}`, 'error');
+}
+
+function onJobCancelled(data) {
+  btnStart.disabled = false;
+  btnStart.textContent = '🚀 Start OCR';
+  hide(btnStop);
+  setProgress(0, 'Annullato');
+
+  setResultStatus(`⏹ Job cancelled after ${data.processed_pages}/${data.total_pages} pages`, 'error');
+  addLog('[Cancelled] Job stopped by user', 'error');
 }
 
 // ── Fetch Per-Page Results ───────────────────────────────────────
@@ -1338,6 +1383,7 @@ btnNewOcr.addEventListener('click', () => {
   hide(fileInfo);
   hide(btnStart);
   hide(progressPanel);
+  hide(btnStop);
   hide(logPanel);
   hide(pageResultsPanel);
   hide(postProcessingPanel);
