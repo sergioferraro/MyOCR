@@ -124,9 +124,7 @@ INSTRUCTIONS FOR VISUAL ELEMENTS:
 1. When you encounter a chart, graph, diagram, photograph, or complex figure,
    replace it (and its caption) with a placeholder in the text:
    `![brief description](IMG_N)` where N starts at 1.
-2. Limit placeholders to a maximum of 5 per page (prioritize the most
-   significant ones).
-3. For every `IMG_N` placeholder in your text, you must create a matching
+2. For every `IMG_N` placeholder in your text, you must create a matching
    entry in the `<boxes>` section using normalized coordinates (0-1000).
 
 REQUIRED OUTPUT FORMAT:

@@ -10,5 +10,7 @@ outputs/
 *_extracted.md
 # Local PDFs / docs
 *.pdf
+# Local configuration
+config.json
 IOS_PORTING_ANALYSIS.md
 
