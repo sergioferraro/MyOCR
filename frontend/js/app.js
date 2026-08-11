@@ -110,6 +110,28 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
+// ── Detect OpenAI mode on startup ──────────────────────────────
+async function detectVlmMode() {
+  try {
+    const res = await fetch('/api/health');
+    if (!res.ok) return;
+    const data = await res.json();
+    const subtitle = document.getElementById('appSubtitle');
+    const badge = document.getElementById('openaiBadge');
+    if (data.openai_mode) {
+      if (subtitle) subtitle.textContent = 'Vision Language Model — OpenAI API';
+      if (badge) {
+        badge.classList.remove('hidden');
+        badge.innerHTML = '<span style="font-size:0.75rem;color:#6ee7b7;">☁️ Using OpenAI VLM (API key active)</span>';
+      }
+    } else {
+      if (subtitle) subtitle.textContent = 'Vision Language Model — LM Studio';
+    }
+  } catch {
+    // ignore — keep default subtitle
+  }
+}
+
 // ── State ────────────────────────────────────────────────────────
 let selectedFile = null;
 let currentJobId = null;
@@ -1547,6 +1569,7 @@ btnSaveConfig.addEventListener('click', async () => {
 
 // ── Init ─────────────────────────────────────────────────────────
 (async () => {
+  await detectVlmMode();
   await loadConfig();
   refreshModels();
 })();

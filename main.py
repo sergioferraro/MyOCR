@@ -44,14 +44,23 @@ FRONTEND_DIR = BASE_DIR / "frontend"
 CONFIG_PATH = BASE_DIR / "config.json"
 
 DEFAULT_URL = "http://localhost:1234"
+OPENAI_API_BASE = "https://api.openai.com"
+OPENAI_DEFAULT_MODEL = "gpt-4o"
 DPI_OPTIONS = [100, 150, 200, 300]
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 PDF_EXTENSIONS = {".pdf"}
 
+# ── Detect OpenAI API key at startup ─────────────────────────────
+_OPENAI_API_KEY: str | None = os.environ.get("OPENAI_API_KEY") or None
+if _OPENAI_API_KEY:
+    print("[Startup] OPENAI_API_KEY detected — using OpenAI VLM endpoint")
+else:
+    print("[Startup] OPENAI_API_KEY not set — using local VLM (LM Studio)")
+
 # ── Default config values ─────────────────────────────────────────
 DEFAULT_CONFIG = {
-    "vlm_url": DEFAULT_URL,
-    "model": "",
+    "vlm_url": OPENAI_API_BASE if _OPENAI_API_KEY else DEFAULT_URL,
+    "model": OPENAI_DEFAULT_MODEL if _OPENAI_API_KEY else "",
     "dpi": 150,
     "force_vlm": False,
     "grounding": False,
@@ -435,7 +444,16 @@ def _parse_non_grounding_response(response_text: str) -> str:
 
 
 def _get_client(url: str) -> OpenAI:
-    return OpenAI(base_url=f"{url}/v1", api_key="not-needed")
+    """
+    Create an OpenAI-compatible client.
+
+    If OPENAI_API_KEY is set and the URL points to OpenAI, uses the real key.
+    Otherwise falls back to a dummy key (for local LM Studio servers).
+    """
+    # Normalize URL: strip trailing /v1 to avoid double-appending
+    base = url.rstrip("/").rstrip("v1").rstrip("/")
+    api_key = _OPENAI_API_KEY if _OPENAI_API_KEY else "not-needed"
+    return OpenAI(base_url=f"{base}/v1", api_key=api_key)
 
 
 def _send_page_to_vlm(image_bytes: bytes, model: str, url: str, *, temperature: float = 0.0, top_p: float = 0.1, seed: int = 42) -> str:
@@ -1039,7 +1057,11 @@ async def serve_frontend():
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "version": "2.1.0"}
+    return {
+        "status": "ok",
+        "version": "2.1.0",
+        "openai_mode": _OPENAI_API_KEY is not None,
+    }
 
 
 # ── Configuration ─────────────────────────────────────────────────────────
