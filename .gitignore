@@ -12,5 +12,14 @@ outputs/
 *.pdf
 # Local configuration
 config.json
+# iOS porting analysis (local reference)
 IOS_PORTING_ANALYSIS.md
+# Implementation plans (no longer needed)
+IMPLEMENTATION_PLAN*.md
+# Old release archives (features already merged)
+release/*.zip
+# Test scripts (legacy)
+test_grounding.py
+# Test logs
+*.log
 
