@@ -82,11 +82,30 @@ const btnAddMorePages   = $('#btnAddMorePages');
 const btnDoneCapturing  = $('#btnDoneCapturing');
 const btnCloseAddPages  = $('#btnCloseAddPages');
 
+// Settings modal
+const settingsModal     = $('#settingsModal');
+const btnOpenSettings   = $('#btnOpenSettings');
+const btnCloseSettings  = $('#btnCloseSettings');
+
 // Rename modal
 const renameModal       = $('#renameModal');
 const renameInput       = $('#renameInput');
 const btnConfirmRename  = $('#btnConfirmRename');
 const btnCloseRename    = $('#btnCloseRename');
+
+// ── Settings Modal ─────────────────────────────────────────────
+btnOpenSettings.addEventListener('click', () => show(settingsModal));
+btnCloseSettings.addEventListener('click', () => hide(settingsModal));
+settingsModal.querySelector('.modal-overlay').addEventListener('click', () => hide(settingsModal));
+
+// Close settings modal on Escape key (only when no input is focused)
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !settingsModal.classList.contains('hidden')) {
+    if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'SELECT') {
+      hide(settingsModal);
+    }
+  }
+});
 
 // ── State ────────────────────────────────────────────────────────
 let selectedFile = null;
@@ -1509,7 +1528,10 @@ async function saveConfig() {
   }
 }
 
-btnSaveConfig.addEventListener('click', saveConfig);
+btnSaveConfig.addEventListener('click', async () => {
+  await saveConfig();
+  setTimeout(() => hide(settingsModal), 800);
+});
 
 // ── Init ─────────────────────────────────────────────────────────
 (async () => {

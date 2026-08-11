@@ -487,6 +487,37 @@ header h1 {
   padding: 8px 0;
 }
 
+/* ── Settings Button (fixed bottom of sidebar) ─────────────────── */
+.btn-settings-fixed {
+  width: 100%;
+  padding: 10px;
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s, color 0.2s;
+  box-shadow: var(--shadow);
+  margin-top: auto;
+}
+
+.btn-settings-fixed:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+  background: rgba(233, 69, 96, 0.08);
+}
+
+/* ── Settings Modal Body ───────────────────────────────────────── */
+.settings-modal-content {
+  max-width: 480px;
+}
+
+.settings-modal-body {
+  padding: 18px;
+}
+
 /* ── Post-processing Actions ─────────────────────────────────── */
 .post-process-actions {
   display: flex;

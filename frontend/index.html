@@ -16,63 +16,8 @@
   <div class="app-layout">
     <!-- ── Sidebar ──────────────────────────────────────────────── -->
     <aside class="sidebar">
-      <!-- Settings Panel -->
-      <section class="panel">
-        <h2>⚙️ Settings</h2>
-        <div class="settings-grid">
-          <div class="field">
-            <label for="serverUrl">Server URL</label>
-            <input type="text" id="serverUrl" placeholder="http://localhost:1234" value="http://localhost:1234">
-          </div>
-          <div class="field">
-            <label for="modelSelect">Model</label>
-            <div class="model-row">
-              <select id="modelSelect">
-                <option value="">— Load models —</option>
-              </select>
-              <button id="btnRefreshModels" class="btn-small">⟳</button>
-            </div>
-          </div>
-          <div class="field">
-            <label for="dpiSelect">PDF DPI</label>
-            <select id="dpiSelect">
-              <option value="100">100</option>
-              <option value="150" selected>150</option>
-              <option value="200">200</option>
-              <option value="300">300</option>
-            </select>
-          </div>
-          <div class="field checkbox-field">
-            <label class="checkbox-label">
-              <input type="checkbox" id="forceVlm">
-              <span>Force VLM</span>
-            </label>
-          </div>
-          <div class="field checkbox-field">
-            <label class="checkbox-label">
-              <input type="checkbox" id="groundingToggle">
-              <span>🖼️ Preserve Charts &amp; Figures (Grounding)</span>
-            </label>
-            <p class="help-text">Save charts, graphs, and figures as separate images in the output</p>
-          </div>
-          <div class="field page-selection-field">
-            <label>Pages to process</label>
-            <div class="page-selection">
-              <label class="radio-label">
-                <input type="radio" name="pageMode" value="all" checked>
-                <span>All</span>
-              </label>
-              <label class="radio-label">
-                <input type="radio" name="pageMode" value="custom">
-                <span>Range</span>
-              </label>
-              <input type="text" id="pageRangeInput" placeholder="es. 1-5,8" class="hidden">
-            </div>
-          </div>
-        </div>
-        <button id="btnSaveConfig" class="btn-primary">💾 Save Settings</button>
-        <span id="configStatus" class="config-status hidden"></span>
-      </section>
+      <!-- Settings button (fixed bottom) -->
+      <button id="btnOpenSettings" class="btn-settings-fixed" title="Settings">⚙️ Settings</button>
 
       <!-- File Upload -->
       <section class="panel">
@@ -174,6 +119,72 @@
         </div>
       </section>
     </main>
+  </div>
+
+  <!-- ── Settings Modal ───────────────────────────────────────── -->
+  <div id="settingsModal" class="modal hidden">
+    <div class="modal-overlay"></div>
+    <div class="modal-content settings-modal-content">
+      <div class="modal-header">
+        <h3>⚙️ Settings</h3>
+        <button id="btnCloseSettings" class="btn-close">&times;</button>
+      </div>
+      <div class="settings-modal-body">
+        <div class="settings-grid">
+          <div class="field">
+            <label for="serverUrl">Server URL</label>
+            <input type="text" id="serverUrl" placeholder="http://localhost:1234" value="http://localhost:1234">
+          </div>
+          <div class="field">
+            <label for="modelSelect">Model</label>
+            <div class="model-row">
+              <select id="modelSelect">
+                <option value="">— Load models —</option>
+              </select>
+              <button id="btnRefreshModels" class="btn-small">⟳</button>
+            </div>
+          </div>
+          <div class="field">
+            <label for="dpiSelect">PDF DPI</label>
+            <select id="dpiSelect">
+              <option value="100">100</option>
+              <option value="150" selected>150</option>
+              <option value="200">200</option>
+              <option value="300">300</option>
+            </select>
+          </div>
+          <div class="field checkbox-field">
+            <label class="checkbox-label">
+              <input type="checkbox" id="forceVlm">
+              <span>Force VLM</span>
+            </label>
+          </div>
+          <div class="field checkbox-field">
+            <label class="checkbox-label">
+              <input type="checkbox" id="groundingToggle">
+              <span>🖼️ Preserve Charts &amp; Figures (Grounding)</span>
+            </label>
+            <p class="help-text">Save charts, graphs, and figures as separate images in the output</p>
+          </div>
+          <div class="field page-selection-field">
+            <label>Pages to process</label>
+            <div class="page-selection">
+              <label class="radio-label">
+                <input type="radio" name="pageMode" value="all" checked>
+                <span>All</span>
+              </label>
+              <label class="radio-label">
+                <input type="radio" name="pageMode" value="custom">
+                <span>Range</span>
+              </label>
+              <input type="text" id="pageRangeInput" placeholder="es. 1-5,8" class="hidden">
+            </div>
+          </div>
+        </div>
+        <button id="btnSaveConfig" class="btn-primary">💾 Save Settings</button>
+        <span id="configStatus" class="config-status hidden"></span>
+      </div>
+    </div>
   </div>
 
   <!-- ── Webcam Preview Modal ─────────────────────────────────── -->
