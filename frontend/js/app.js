@@ -1,4 +1,7 @@
-/* ── Local OCR — Frontend Controller (Sidebar + Split View) ──────
+/* ── MyOCR — Frontend Controller (Sidebar + Split View) ─────────
+ * Author: Sergio Ferraro
+ * Repository: https://github.com/sergioferraro/MyOCR
+ *
  * Sidebar: Setting, File, Progress, Log
  * Main area: source (left) ↔ result markdown (right)
  * ──────────────────────────────────────────────────────────────── */

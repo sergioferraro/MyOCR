@@ -1,6 +1,11 @@
 """
-Local OCR Server — FastAPI Backend
-=================================
+MyOCR — FastAPI Backend
+=======================
+Local OCR Server with Vision Language Model support.
+
+Author: Sergio Ferraro
+Repository: https://github.com/sergioferraro/MyOCR
+
 Web server that exposes OCR capabilities via REST API + SSE streaming.
 Serves the web frontend statically.
 
@@ -1027,8 +1032,8 @@ def run_ocr_job(
 # ---------------------------------------------------------------------------
 
 app = FastAPI(
-    title="Local OCR Server",
-    description="OCR via local Vision Language Model (LM Studio)",
+    title="MyOCR",
+    description="MyOCR — Local OCR with Vision Language Model. Author: Sergio Ferraro. https://github.com/sergioferraro/MyOCR",
     version="2.1.0",
 )
 

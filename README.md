@@ -1,4 +1,7 @@
-# Local OCR — Vision Language Model
+# MyOCR — Local OCR with Vision Language Model
+
+> **Author:** Sergio Ferraro
+> **Repository:** [github.com/sergioferraro/MyOCR](https://github.com/sergioferraro/MyOCR)
 
 A modern web application for Optical Character Recognition (OCR) on **PDFs** and **images** using a **local Vision Language Model** served via [LM Studio](https://lmstudio.ai/) or any OpenAI-compatible API.
 

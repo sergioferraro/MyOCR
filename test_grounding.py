@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 """
+MyOCR — Grounding Test Script
+=============================
+Author: Sergio Ferraro
+Repository: https://github.com/sergioferraro/MyOCR
+
 Test script: validate Qwen-VL grounding capabilities through LM Studio.
 ================================================================================
 

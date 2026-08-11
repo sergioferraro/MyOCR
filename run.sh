@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# ── Local OCR — Quick Start ─────────────────────────────
+# ── MyOCR — Quick Start ─────────────────────────────────
+# Author: Sergio Ferraro
+# Repository: https://github.com/sergioferraro/MyOCR
 # Usage: ./run.sh
 # ────────────────────────────────────────────────────────
 
