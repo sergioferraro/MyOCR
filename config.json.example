@@ -1,7 +1,0 @@
-{
-  "vlm_url": "http://localhost:1234",
-  "model": "",
-  "dpi": 150,
-  "force_vlm": false,
-  "grounding": false
-}
