@@ -1,0 +1,10 @@
+{
+  "vlm_url": "http://localhost:1234",
+  "model": "qwen/qwen3-vl-4b",
+  "dpi": 150,
+  "force_vlm": true,
+  "grounding": false,
+  "temperature": 0,
+  "top_p": 0.05,
+  "seed": 42
+}
