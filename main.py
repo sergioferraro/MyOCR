@@ -55,6 +55,9 @@ DEFAULT_CONFIG = {
     "dpi": 150,
     "force_vlm": False,
     "grounding": False,
+    "temperature": 0.0,
+    "top_p": 0.1,
+    "seed": 42,
 }
 
 SYSTEM_PROMPT = (
@@ -435,7 +438,7 @@ def _get_client(url: str) -> OpenAI:
     return OpenAI(base_url=f"{url}/v1", api_key="not-needed")
 
 
-def _send_page_to_vlm(image_bytes: bytes, model: str, url: str) -> str:
+def _send_page_to_vlm(image_bytes: bytes, model: str, url: str, *, temperature: float = 0.0, top_p: float = 0.1, seed: int = 42) -> str:
     client = _get_client(url)
     b64 = base64.b64encode(image_bytes).decode("utf-8")
     response = client.chat.completions.create(
@@ -448,14 +451,14 @@ def _send_page_to_vlm(image_bytes: bytes, model: str, url: str) -> str:
             ]},
         ],
         max_tokens=8192,
-        temperature=OCR_TEMPERATURE,
-        top_p=OCR_TOP_P,
-        seed=OCR_SEED,
+        temperature=temperature,
+        top_p=top_p,
+        seed=seed,
     )
     return _parse_non_grounding_response(response.choices[0].message.content)
 
 
-def _send_page_to_vlm_grounding(image_bytes: bytes, model: str, url: str) -> str:
+def _send_page_to_vlm_grounding(image_bytes: bytes, model: str, url: str, *, temperature: float = 0.0, top_p: float = 0.1, seed: int = 42) -> str:
     """Send page to VLM with grounding prompt (detects charts/figures + bounding boxes)."""
     client = _get_client(url)
     b64 = base64.b64encode(image_bytes).decode("utf-8")
@@ -469,9 +472,9 @@ def _send_page_to_vlm_grounding(image_bytes: bytes, model: str, url: str) -> str
             ]},
         ],
         max_tokens=GROUNDING_MAX_TOKENS,
-        temperature=OCR_TEMPERATURE,
-        top_p=OCR_TOP_P,
-        seed=OCR_SEED,
+        temperature=temperature,
+        top_p=top_p,
+        seed=seed,
     )
     return response.choices[0].message.content
 
@@ -491,6 +494,9 @@ def _process_single_page(
     force_vlm: bool,
     job_id: str,
     grounding: bool = False,
+    temperature: float = 0.0,
+    top_p: float = 0.1,
+    seed: int = 42,
 ) -> None:
     """
     Process a single PDF page and store the result in page_results.
@@ -511,7 +517,7 @@ def _process_single_page(
             page_bytes = pix.tobytes("png")
 
             _add_log(job_id, f"[{page_num}/{doc.page_count}] Sending page {page_num} to VLM ({model}, grounding)...")
-            result = _send_page_to_vlm_grounding(page_bytes, model, url)
+            result = _send_page_to_vlm_grounding(page_bytes, model, url, temperature=temperature, top_p=top_p, seed=seed)
 
             markdown, img_metadata = parse_grounding_response(result, page_num)
 
@@ -542,7 +548,7 @@ def _process_single_page(
             page_bytes = pix.tobytes("png")
 
             _add_log(job_id, f"[{page_num}/{doc.page_count}] Sending page {page_num} to VLM ({model})...")
-            result = _send_page_to_vlm(page_bytes, model, url)
+            result = _send_page_to_vlm(page_bytes, model, url, temperature=temperature, top_p=top_p, seed=seed)
             _update_page_result(
                 job_id, page_num,
                 markdown=result, model=model,
@@ -817,6 +823,9 @@ def process_image(
     url: str,
     job_id: str,
     filename: str,
+    temperature: float = 0.0,
+    top_p: float = 0.1,
+    seed: int = 42,
 ) -> str:
     """OCR a single image file."""
     _add_log(job_id, "[Start] Processing image...")
@@ -830,7 +839,7 @@ def process_image(
         return ""
 
     try:
-        result = _send_page_to_vlm(file_bytes, model, url)
+        result = _send_page_to_vlm(file_bytes, model, url, temperature=temperature, top_p=top_p, seed=seed)
         _update_page_result(
             job_id, 1,
             markdown=result, model=model,
@@ -857,6 +866,9 @@ def process_pdf(
     filename: str,
     page_spec: str,
     grounding: bool = False,
+    temperature: float = 0.0,
+    top_p: float = 0.1,
+    seed: int = 42,
 ):
     """
     Process a PDF — hybrid text extraction + VLM for scanned pages.
@@ -913,7 +925,7 @@ def process_pdf(
                 _progress(job_id, processed, pages)
                 continue
 
-            _process_single_page(doc, i, dpi, model, url, force_vlm, job_id, grounding)
+            _process_single_page(doc, i, dpi, model, url, force_vlm, job_id, grounding, temperature, top_p, seed)
 
             with jobs_lock:
                 pr = jobs[job_id].page_results.get(pn)
@@ -968,20 +980,23 @@ def run_ocr_job(
     filename: str,
     page_spec: str,
     grounding: bool = False,
+    temperature: float = 0.0,
+    top_p: float = 0.1,
+    seed: int = 42,
 ):
     """Top-level worker: dispatch to image or PDF handler."""
     _set_status(job_id, "processing")
 
     try:
         if ext in IMAGE_EXTENSIONS:
-            output = process_image(file_bytes, model, url, job_id, filename)
+            output = process_image(file_bytes, model, url, job_id, filename, temperature, top_p, seed)
             # Only mark as done if not already cancelled
             with jobs_lock:
                 if job_id in jobs and jobs[job_id].status != "cancelled":
                     _set_status(job_id, "done", output)
                     _progress(job_id, 1, 1)
         elif ext in PDF_EXTENSIONS:
-            output = process_pdf(file_bytes, dpi, model, url, force_vlm, job_id, filename, page_spec, grounding)
+            output = process_pdf(file_bytes, dpi, model, url, force_vlm, job_id, filename, page_spec, grounding, temperature, top_p, seed)
         else:
             _set_status(job_id, "error", f"Unsupported file type: {ext}")
     except Exception as exc:
@@ -1173,6 +1188,9 @@ async def start_ocr(
     force_vlm: bool = Form(False),
     page_spec: str = Form("all"),
     grounding: bool = Form(False),
+    temperature: float = Form(0.0),
+    top_p: float = Form(0.1),
+    seed: int = Form(42),
     background_tasks: BackgroundTasks = BackgroundTasks(),
 ):
     if not model:
@@ -1206,6 +1224,9 @@ async def start_ocr(
         filename=file.filename or "unknown",
         page_spec=page_spec,
         grounding=grounding,
+        temperature=temperature,
+        top_p=top_p,
+        seed=seed,
     )
 
     return {"job_id": job_id}
@@ -1297,6 +1318,12 @@ async def reprocess_page(
 
     grounding = job.grounding_enabled
 
+    # Load sampling params from config
+    cfg = load_config()
+    temperature = float(cfg.get("temperature", 0.0))
+    top_p = float(cfg.get("top_p", 0.1))
+    seed = int(cfg.get("seed", 42))
+
     # Open the stored PDF and process the requested page
     try:
         doc = fitz.open(stream=job.file_bytes, filetype="pdf")
@@ -1312,7 +1339,7 @@ async def reprocess_page(
 
         if grounding:
             # ── Grounding mode: use grounding VLM + rewrite grounding output ──
-            result = _send_page_to_vlm_grounding(page_bytes, model, url)
+            result = _send_page_to_vlm_grounding(page_bytes, model, url, temperature=temperature, top_p=top_p, seed=seed)
             markdown, img_metadata = parse_grounding_response(result, page_num)
 
             _update_page_result(
@@ -1333,7 +1360,7 @@ async def reprocess_page(
             _add_log(job_id, f"[Success] Page {page_num} reprocessed (grounding) → {output_path}")
         else:
             # ── Classic (non-grounding) mode ──────────────────────────────
-            result = _send_page_to_vlm(page_bytes, model, url)
+            result = _send_page_to_vlm(page_bytes, model, url, temperature=temperature, top_p=top_p, seed=seed)
             _update_page_result(
                 job_id, page_num,
                 markdown=result, model=model,

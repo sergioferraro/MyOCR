@@ -12,6 +12,9 @@ const btnRefreshModels  = $('#btnRefreshModels');
 const dpiSelect         = $('#dpiSelect');
 const forceVlmCheckbox  = $('#forceVlm');
 const groundingToggle   = $('#groundingToggle');
+const temperatureInput  = $('#temperatureInput');
+const topPInput         = $('#topPInput');
+const seedInput         = $('#seedInput');
 const pageRangeInput    = $('#pageRangeInput');
 
 const dropZone          = $('#dropZone');
@@ -742,6 +745,9 @@ btnStart.addEventListener('click', async () => {
   formData.append('dpi', dpi.toString());
   formData.append('force_vlm', forceVlm ? 'true' : 'false');
   formData.append('grounding', grounding ? 'true' : 'false');
+  formData.append('temperature', String(parseFloat(temperatureInput.value) || 0));
+  formData.append('top_p', String(parseFloat(topPInput.value) || 0.1));
+  formData.append('seed', String(parseInt(seedInput.value, 10) || 42));
   formData.append('page_spec', pageSpec);
 
   try {
@@ -1502,6 +1508,9 @@ async function loadConfig() {
     if (cfg.dpi) dpiSelect.value = String(cfg.dpi);
     if (cfg.force_vlm != null) forceVlmCheckbox.checked = cfg.force_vlm;
     if (cfg.grounding != null) groundingToggle.checked = cfg.grounding;
+    if (cfg.temperature != null) temperatureInput.value = cfg.temperature;
+    if (cfg.top_p != null) topPInput.value = cfg.top_p;
+    if (cfg.seed != null) seedInput.value = cfg.seed;
   } catch (err) {
     console.warn('Config load failed:', err);
   }
@@ -1515,6 +1524,9 @@ async function saveConfig() {
       dpi: parseInt(dpiSelect.value, 10),
       force_vlm: forceVlmCheckbox.checked,
       grounding: groundingToggle.checked,
+      temperature: parseFloat(temperatureInput.value) || 0,
+      top_p: parseFloat(topPInput.value) || 0.1,
+      seed: parseInt(seedInput.value, 10) || 42,
     };
     const res = await fetch('/api/config', {
       method: 'POST',
